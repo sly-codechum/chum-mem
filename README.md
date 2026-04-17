@@ -1,5 +1,6 @@
 # chum-mem
 
+<img src="docs/images/web.png"/>
 <img src="docs/images/evidence.png"/>
 
 ## Why this exists
@@ -22,6 +23,7 @@ The **Proof-Carrying Knowledge Compiler** redefines three units of AI memory:
 | **Memory** | Text chunks / summaries | **Claim** — an atomic, typed assertion: `fact`, `decision`, `task`, `constraint`, `bug`, `fix`, `implementation_detail`, or `open_question` |
 | **Trust** | "Source: file X" | **Proof** — structured evidence with `authority_class` (tool_verified, user_confirmed, repository_derived, session_derived, model_inferred), `verification_status` (verified, unverified, refuted, superseded), `proof_type`, `source_ref`, and `excerpt` |
 | **Context** | Top-k similar text | **Compiled minimal proof set** — the smallest set of current-valid claims whose proof is sufficient to answer, assembled within a token budget |
+<img src="docs/images/claims.png"/>
 
 ### How claims flow through the system
 
