@@ -1,0 +1,16 @@
+[package]
+name = "chum-mem-app"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[dependencies]
+chum-mem-config = { path = "../chum_mem_config" }
+chum-mem-contracts = { path = "../chum_mem_contracts" }
+serde.workspace = true
+time.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+uuid.workspace = true

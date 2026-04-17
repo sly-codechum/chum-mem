@@ -1,0 +1,46 @@
+# syntax=docker/dockerfile:1.7
+
+ARG RUST_VERSION=1
+ARG ALPINE_VERSION=3.22
+ARG APP_UID=10001
+
+FROM rust:${RUST_VERSION}-alpine AS build
+WORKDIR /app
+
+RUN --mount=type=cache,target=/var/cache/apk,sharing=locked \
+    ln -s /var/cache/apk /etc/apk/cache \
+    && apk add --no-cache build-base pkgconf perl ca-certificates
+
+RUN --mount=type=bind,source=Cargo.toml,target=/app/Cargo.toml,readonly \
+    --mount=type=bind,source=Cargo.lock,target=/app/Cargo.lock,readonly \
+    --mount=type=bind,source=.cargo,target=/app/.cargo,readonly \
+    --mount=type=bind,source=infra,target=/app/infra,readonly \
+    --mount=type=bind,source=rust,target=/app/rust,readonly \
+    --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/usr/local/cargo/git \
+    --mount=type=cache,target=/app/target \
+    <<'EOF'
+set -eux
+cargo build --release --locked -p chum-mem-api -p chum-mem-worker
+install -D /app/target/release/chum-mem-api /out/chum-mem-api
+install -D /app/target/release/chum-mem-worker /out/chum-mem-worker
+EOF
+
+FROM alpine:${ALPINE_VERSION} AS rust-runtime
+ARG APP_UID
+
+RUN apk add --no-cache ca-certificates curl dumb-init \
+    && adduser -D -H -u "${APP_UID}" appuser
+
+WORKDIR /app
+USER appuser
+ENTRYPOINT ["dumb-init", "--"]
+
+FROM rust-runtime AS rust-api
+COPY --from=build /out/chum-mem-api /bin/chum-mem-api
+EXPOSE 65301
+CMD ["/bin/chum-mem-api"]
+
+FROM rust-runtime AS rust-worker
+COPY --from=build /out/chum-mem-worker /bin/chum-mem-worker
+CMD ["/bin/chum-mem-worker"]

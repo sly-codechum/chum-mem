@@ -1,0 +1,12 @@
+{
+  "name": "chum-memory",
+  "version": "0.1.0",
+  "description": "Persistent memory extension for Gemini CLI backed by chum-memory-project MCP.",
+  "mcpServers": {
+    "chum-memory": {
+      "type": "http",
+      "url": "http://localhost:63001/mcp"
+    }
+  },
+  "contextFileName": "GEMINI.md"
+}

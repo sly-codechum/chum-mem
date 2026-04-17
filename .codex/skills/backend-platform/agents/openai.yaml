@@ -1,0 +1,4 @@
+interface:
+  display_name: Backend Platform
+  short_description: Build auth, tokens, ingestion, and tenant-safe APIs.
+  category: engineering

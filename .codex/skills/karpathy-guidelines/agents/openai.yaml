@@ -1,0 +1,4 @@
+interface:
+  display_name: Karpathy Guidelines
+  short_description: Follow the Karpathy guidelines for building a safe and reliable AI system.
+  category: engineering

@@ -1,0 +1,103 @@
+{
+  "profile": "smoke",
+  "projectId": "00000000-0000-0000-0000-000000000003",
+  "sessions": 2000,
+  "eventsPerSession": 50,
+  "totalEvents": 100000,
+  "concurrency": 16,
+  "startedAt": "2026-04-15T13:46:27.640Z",
+  "finishedAt": "2026-04-15T13:48:08.273Z",
+  "totalDurationMs": 100632.364625,
+  "throughputEventsPerSec": 993.7160909677868,
+  "latency": [
+    {
+      "label": "session_end",
+      "n": 2000,
+      "p50": 195.12658399999782,
+      "p95": 828.2672920000005,
+      "p99": 1496.2277500000018,
+      "max": 2419.095666000001,
+      "mean": 296.8661970094999
+    },
+    {
+      "label": "session_events_batch",
+      "n": 2000,
+      "p50": 12.645791000000827,
+      "p95": 30.664292000001296,
+      "p99": 41.14420799999789,
+      "max": 159.1094999999999,
+      "mean": 15.178566417499997
+    },
+    {
+      "label": "session_start",
+      "n": 2000,
+      "p50": 4.974167000000307,
+      "p95": 8.124416999999085,
+      "p99": 16.70195899999817,
+      "max": 285.521167,
+      "mean": 6.257571972000031
+    }
+  ],
+  "pgCountersBefore": {
+    "deadlocks": 0,
+    "tempFiles": 4,
+    "tempBytes": 3883008,
+    "xactCommit": 9619,
+    "xactRollback": 8
+  },
+  "pgCountersAfter": {
+    "deadlocks": 0,
+    "tempFiles": 4,
+    "tempBytes": 3883008,
+    "xactCommit": 15916,
+    "xactRollback": 8
+  },
+  "pgCountersDelta": {
+    "deadlocks": 0,
+    "tempFiles": 0,
+    "tempBytes": 0,
+    "xactCommit": 6297,
+    "xactRollback": 0
+  },
+  "maxLocksPerXactSampled": 118,
+  "retrievalChecks": {
+    "passed": true,
+    "checks": [
+      {
+        "name": "retrieve_marker_0",
+        "ok": true
+      },
+      {
+        "name": "retrieve_marker_250",
+        "ok": true
+      },
+      {
+        "name": "retrieve_marker_500",
+        "ok": true
+      },
+      {
+        "name": "retrieve_marker_750",
+        "ok": true
+      },
+      {
+        "name": "retrieve_marker_1000",
+        "ok": true
+      },
+      {
+        "name": "retrieve_marker_1250",
+        "ok": true
+      },
+      {
+        "name": "retrieve_marker_1500",
+        "ok": true
+      },
+      {
+        "name": "retrieve_marker_1750",
+        "ok": true
+      }
+    ]
+  },
+  "fatalErrors": [
+    "reconcile-claim-state queue did not drain in 60000ms (pending=1)"
+  ]
+}

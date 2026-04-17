@@ -1,0 +1,21 @@
+[package]
+name = "chum-mem-worker"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+chum-mem-app = { path = "../../crates/chum_mem_app" }
+chum-mem-config = { path = "../../crates/chum_mem_config" }
+chum-mem-contracts = { path = "../../crates/chum_mem_contracts" }
+chum-mem-db = { path = "../../crates/chum_mem_db" }
+chum-mem-pipeline = { path = "../../crates/chum_mem_pipeline" }
+reqwest.workspace = true
+serde_json.workspace = true
+sqlx.workspace = true
+time.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+uuid.workspace = true

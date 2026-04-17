@@ -1,0 +1,4 @@
+interface:
+  display_name: Security and QA
+  short_description: Review tenant isolation, token security, and retrieval correctness.
+  category: engineering

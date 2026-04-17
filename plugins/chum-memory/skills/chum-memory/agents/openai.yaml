@@ -1,0 +1,3 @@
+interface:
+  display_name: Chum Memory
+  short_description: Query project and session memory before code changes.

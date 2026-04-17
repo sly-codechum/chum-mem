@@ -1,0 +1,30 @@
+{
+  "name": "personal",
+  "owner": {
+    "name": "CodeChum",
+    "email": "sly@codechum.com"
+  },
+  "plugins": [
+    {
+      "name": "chum-memory",
+      "source": "./plugins/chum-memory-claude",
+      "description": "Persistent memory plugin for Claude Code using local and production MCP endpoints.",
+      "version": "0.1.0",
+      "author": {
+        "name": "CodeChum",
+        "email": "sly@codechum.com"
+      },
+      "homepage": "https://github.com/CodeChum/chum-memory",
+      "repository": "https://github.com/CodeChum/chum-memory",
+      "license": "MIT",
+      "category": "development",
+      "keywords": [
+        "memory",
+        "mcp",
+        "claude-code",
+        "codex",
+        "gemini"
+      ]
+    }
+  ]
+}

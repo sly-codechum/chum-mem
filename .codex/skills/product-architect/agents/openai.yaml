@@ -1,0 +1,4 @@
+interface:
+  display_name: Product Architect
+  short_description: Plan architecture, contracts, schema, and task decomposition.
+  category: engineering

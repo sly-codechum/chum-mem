@@ -1,0 +1,41 @@
+{
+  "name": "chum-mem",
+  "private": true,
+  "version": "0.1.0",
+  "packageManager": "pnpm@10.6.0",
+  "devDependencies": {
+    "@types/cors": "^2.8.17",
+    "@types/express": "^5.0.1",
+    "@types/node": "^22.13.10",
+    "@types/pg": "^8.20.0",
+    "@types/react": "^19.0.12",
+    "eslint": "^9.22.0",
+    "pg": "^8.20.0",
+    "tsx": "^4.19.3",
+    "typescript": "^5.8.2",
+    "vitest": "^3.0.8"
+  },
+  "scripts": {
+    "build": "pnpm -r build",
+    "typecheck": "pnpm --filter @chum-mem/contracts build && pnpm --filter @chum-mem/db build && pnpm --filter @chum-mem/knowledge build && pnpm --filter @chum-mem/retrieval build && pnpm -r typecheck",
+    "test": "pnpm -r test",
+    "lint": "pnpm -r lint",
+    "db:migrate": "pnpm --filter @chum-mem/db migrate",
+    "dev:api": "pnpm --filter @chum-mem/api dev",
+    "dev:web": "pnpm --filter @chum-mem/web dev",
+    "dev:worker": "pnpm --filter @chum-mem/worker dev",
+    "docker:up": "docker compose up --build",
+    "docker:down": "docker compose down -v",
+    "volumes:backup": "./scripts/backup-volumes.sh",
+    "volumes:restore": "./scripts/restore-volumes.sh",
+    "sessions:import": "tsx ./scripts/import-sessions.ts",
+    "bench:ingest:smoke": "tsx ./scripts/benchmark/ingest-scale.ts --profile smoke",
+    "bench:ingest:scale": "tsx ./scripts/benchmark/ingest-scale.ts --profile scale",
+    "kb:build": "pnpm --filter @chum-mem/knowledge build && node packages/knowledge/dist/repo-cli.js build .",
+    "kb:update": "pnpm --filter @chum-mem/knowledge build && node packages/knowledge/dist/repo-cli.js update .",
+    "kb:cluster": "pnpm --filter @chum-mem/knowledge build && node packages/knowledge/dist/repo-cli.js cluster-only .",
+    "kb:query": "pnpm --filter @chum-mem/knowledge build && node packages/knowledge/dist/repo-cli.js query .",
+    "kb:path": "pnpm --filter @chum-mem/knowledge build && node packages/knowledge/dist/repo-cli.js path .",
+    "kb:explain": "pnpm --filter @chum-mem/knowledge build && node packages/knowledge/dist/repo-cli.js explain ."
+  }
+}

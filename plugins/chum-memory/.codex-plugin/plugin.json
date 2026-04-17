@@ -1,0 +1,46 @@
+{
+  "name": "chum-memory",
+  "version": "0.1.1",
+  "description": "Persistent memory workflows for Codex, Claude, and Gemini backed by chum-memory-project MCP.",
+  "author": {
+    "name": "CodeChum",
+    "email": "support@codechum.com",
+    "url": "https://github.com/CodeChum"
+  },
+  "homepage": "https://github.com/CodeChum/chum-memory-project",
+  "repository": "https://github.com/CodeChum/chum-memory-project",
+  "license": "MIT",
+  "keywords": [
+    "memory",
+    "mcp",
+    "codex",
+    "claude",
+    "gemini",
+    "retrieval"
+  ],
+  "skills": "./skills/",
+  "hooks": "./hooks/hooks.json",
+  "mcpServers": "./.mcp.json",
+  "interface": {
+    "displayName": "ChumMemory",
+    "shortDescription": "Persistent memory MCP for coding agents",
+    "longDescription": "Use Chum Memory to ingest and retrieve coding-session memory with tenant-safe hybrid retrieval from the chum-memory-project stack.",
+    "developerName": "CodeChum",
+    "category": "Coding",
+    "capabilities": [
+      "Interactive",
+      "Read",
+      "Write"
+    ],
+    "websiteURL": "https://github.com/CodeChum/chum-memory-project",
+    "privacyPolicyURL": "https://github.com/CodeChum/chum-memory-project",
+    "termsOfServiceURL": "https://github.com/CodeChum/chum-memory-project",
+    "defaultPrompt": [
+      "Search relevant memory before implementing this task and return only top matches.",
+      "Ingest this session and preserve command outputs as searchable context.",
+      "Build a compact context pack for this bugfix with strict token budget."
+    ],
+    "brandColor": "#0B5FFF",
+    "screenshots": []
+  }
+}

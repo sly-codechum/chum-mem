@@ -1,0 +1,182 @@
+services:
+  postgres:
+    image: pgvector/pgvector:pg18
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-chum_mem}
+      POSTGRES_USER: ${POSTGRES_USER:-chum_mem}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-chum_mem}
+    ports:
+      - "65432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql
+      - ./infra/migrations:/docker-entrypoint-initdb.d:ro
+    shm_size: "1g"
+    command:
+      - "postgres"
+      # ── Memory (budget: fits in ~4GB Docker VM with headroom for api/worker/chroma) ──
+      - "-c"
+      - "shared_buffers=512MB"
+      - "-c"
+      - "work_mem=16MB"
+      - "-c"
+      - "maintenance_work_mem=256MB"
+      - "-c"
+      - "effective_cache_size=1536MB"
+      # ── WAL: fast commits, but safe crash recovery ──
+      - "-c"
+      - "synchronous_commit=off"
+      - "-c"
+      - "wal_buffers=32MB"
+      - "-c"
+      - "wal_compression=lz4"
+      - "-c"
+      - "full_page_writes=on"
+      - "-c"
+      - "commit_delay=100"
+      - "-c"
+      - "commit_siblings=5"
+      # ── Checkpoints: balanced for stability ──
+      - "-c"
+      - "checkpoint_timeout=10min"
+      - "-c"
+      - "checkpoint_completion_target=0.9"
+      - "-c"
+      - "max_wal_size=1GB"
+      - "-c"
+      - "min_wal_size=256MB"
+      # ── Planner: assume fast SSD storage (Colima virtio) ──
+      - "-c"
+      - "random_page_cost=1.1"
+      - "-c"
+      - "effective_io_concurrency=200"
+      # ── Parallelism: use available CPUs (6 cores) ──
+      - "-c"
+      - "max_worker_processes=6"
+      - "-c"
+      - "max_parallel_workers=4"
+      - "-c"
+      - "max_parallel_workers_per_gather=2"
+      - "-c"
+      - "max_parallel_maintenance_workers=2"
+      # ── Lock table (fix: out of shared memory on PCKC edge injection) ──
+      - "-c"
+      - "max_locks_per_transaction=4096"
+      - "-c"
+      - "max_pred_locks_per_transaction=2048"
+      - "-c"
+      - "deadlock_timeout=5s"
+      # ── Connections ──
+      - "-c"
+      - "max_connections=60"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-chum_mem} -d ${POSTGRES_DB:-chum_mem}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  chroma:
+    image: chromadb/chroma:1.5.3
+    volumes:
+      - chroma_data:/data
+    ports:
+      - "60008:8000"
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.rust
+      target: rust-api
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgres://chum_mem:chum_mem@postgres:5432/chum_mem}
+      DB_MIN_CONNECTIONS: ${DB_MIN_CONNECTIONS:-1}
+      DB_MAX_CONNECTIONS: ${DB_MAX_CONNECTIONS:-25}
+      DB_CONNECT_TIMEOUT_SECS: ${DB_CONNECT_TIMEOUT_SECS:-15}
+      DB_ACQUIRE_TIMEOUT_SECS: ${DB_ACQUIRE_TIMEOUT_SECS:-15}
+      RUN_DB_MIGRATIONS: ${RUN_DB_MIGRATIONS:-true}
+      READINESS_TIMEOUT_MS: ${READINESS_TIMEOUT_MS:-5000}
+      MCP_HOST: ${MCP_HOST:-0.0.0.0}
+      MCP_PORT: ${MCP_PORT:-63001}
+      CHROMA_URL: ${CHROMA_URL:-http://chroma:8000}
+      CHROMA_COLLECTION: ${CHROMA_COLLECTION:-memories}
+      CHUM_MEM_ORGANIZATION_ID: ${CHUM_MEM_ORGANIZATION_ID:-00000000-0000-0000-0000-000000000001}
+      CHUM_MEM_TEAM_ID: ${CHUM_MEM_TEAM_ID:-00000000-0000-0000-0000-000000000002}
+      CHUM_MEM_PROJECT_ID: ${CHUM_MEM_PROJECT_ID:-00000000-0000-0000-0000-000000000003}
+      CHUM_MEM_USER_ID: ${CHUM_MEM_USER_ID:-00000000-0000-0000-0000-000000000004}
+      CHUM_MEM_ACTOR_TYPE: ${CHUM_MEM_ACTOR_TYPE:-system}
+      CHUM_MEM_TEAM_ROLE: ${CHUM_MEM_TEAM_ROLE:-admin}
+      KNOWLEDGE_GRAPH_MAX_CLUSTER_NODES: ${KNOWLEDGE_GRAPH_MAX_CLUSTER_NODES:-100000}
+      KNOWLEDGE_GRAPH_MAX_CLUSTER_EDGES: ${KNOWLEDGE_GRAPH_MAX_CLUSTER_EDGES:-200000}
+      WORKER_POLL_INTERVAL_MS: ${WORKER_POLL_INTERVAL_MS:-5000}
+      DASHBOARD_API_URL: ${DASHBOARD_API_URL:-http://api:63001}
+      WEB_PORT: ${WEB_PORT:-63000}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      chroma:
+        condition: service_started
+    ports:
+      - "63001:63001"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:63001/ready >/dev/null || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.rust
+      target: rust-worker
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgres://chum_mem:chum_mem@postgres:5432/chum_mem}
+      DB_MIN_CONNECTIONS: ${DB_MIN_CONNECTIONS:-1}
+      DB_MAX_CONNECTIONS: ${DB_MAX_CONNECTIONS:-25}
+      DB_CONNECT_TIMEOUT_SECS: ${DB_CONNECT_TIMEOUT_SECS:-15}
+      DB_ACQUIRE_TIMEOUT_SECS: ${DB_ACQUIRE_TIMEOUT_SECS:-15}
+      RUN_DB_MIGRATIONS: ${RUN_DB_MIGRATIONS:-true}
+      READINESS_TIMEOUT_MS: ${READINESS_TIMEOUT_MS:-5000}
+      MCP_HOST: ${MCP_HOST:-0.0.0.0}
+      MCP_PORT: ${MCP_PORT:-63001}
+      CHROMA_URL: ${CHROMA_URL:-http://chroma:8000}
+      CHROMA_COLLECTION: ${CHROMA_COLLECTION:-memories}
+      CHUM_MEM_ORGANIZATION_ID: ${CHUM_MEM_ORGANIZATION_ID:-00000000-0000-0000-0000-000000000001}
+      CHUM_MEM_TEAM_ID: ${CHUM_MEM_TEAM_ID:-00000000-0000-0000-0000-000000000002}
+      CHUM_MEM_PROJECT_ID: ${CHUM_MEM_PROJECT_ID:-00000000-0000-0000-0000-000000000003}
+      CHUM_MEM_USER_ID: ${CHUM_MEM_USER_ID:-00000000-0000-0000-0000-000000000004}
+      CHUM_MEM_ACTOR_TYPE: ${CHUM_MEM_ACTOR_TYPE:-system}
+      CHUM_MEM_TEAM_ROLE: ${CHUM_MEM_TEAM_ROLE:-admin}
+      WORKER_POLL_INTERVAL_MS: ${WORKER_POLL_INTERVAL_MS:-5000}
+      KNOWLEDGE_GRAPH_MAX_CLUSTER_NODES: ${KNOWLEDGE_GRAPH_MAX_CLUSTER_NODES:-100000}
+      KNOWLEDGE_GRAPH_MAX_CLUSTER_EDGES: ${KNOWLEDGE_GRAPH_MAX_CLUSTER_EDGES:-200000}
+      DASHBOARD_API_URL: ${DASHBOARD_API_URL:-http://api:63001}
+      WEB_PORT: ${WEB_PORT:-63000}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      chroma:
+        condition: service_started
+
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: web
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgres://chum_mem:chum_mem@postgres:5432/chum_mem}
+      WEB_PORT: ${WEB_PORT:-63000}
+      DASHBOARD_API_URL: ${DASHBOARD_API_URL:-http://api:63001}
+      CHUM_MEM_ORGANIZATION_ID: ${CHUM_MEM_ORGANIZATION_ID:-00000000-0000-0000-0000-000000000001}
+      CHUM_MEM_TEAM_ID: ${CHUM_MEM_TEAM_ID:-00000000-0000-0000-0000-000000000002}
+      CHUM_MEM_PROJECT_ID: ${CHUM_MEM_PROJECT_ID:-00000000-0000-0000-0000-000000000003}
+      CHUM_MEM_USER_ID: ${CHUM_MEM_USER_ID:-00000000-0000-0000-0000-000000000004}
+      CHUM_MEM_ACTOR_TYPE: ${CHUM_MEM_ACTOR_TYPE:-system}
+      CHUM_MEM_TEAM_ROLE: ${CHUM_MEM_TEAM_ROLE:-admin}
+    depends_on:
+      api:
+        condition: service_healthy
+    ports:
+      - "63000:63000"
+
+volumes:
+  postgres_data:
+  chroma_data:

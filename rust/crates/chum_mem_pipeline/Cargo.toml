@@ -1,0 +1,40 @@
+[package]
+name = "chum-mem-pipeline"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[dependencies]
+chum-mem-contracts = { path = "../chum_mem_contracts" }
+futures.workspace = true
+indexmap.workspace = true
+regex.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+time.workspace = true
+uuid.workspace = true
+
+# Tree-sitter core + language grammars
+streaming-iterator.workspace = true
+tree-sitter.workspace = true
+tree-sitter-python.workspace = true
+tree-sitter-typescript.workspace = true
+tree-sitter-javascript.workspace = true
+tree-sitter-go.workspace = true
+tree-sitter-rust.workspace = true
+tree-sitter-java.workspace = true
+tree-sitter-c.workspace = true
+tree-sitter-cpp.workspace = true
+tree-sitter-ruby.workspace = true
+tree-sitter-c-sharp.workspace = true
+tree-sitter-scala.workspace = true
+tree-sitter-php.workspace = true
+tree-sitter-lua.workspace = true
+tree-sitter-zig.workspace = true
+tree-sitter-elixir.workspace = true
+tree-sitter-julia.workspace = true

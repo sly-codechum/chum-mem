@@ -1,0 +1,35 @@
+---
+name: frontend-dashboard
+description: Build the chum-mem web dashboard for auth, team and project navigation, token management, memory search, and audit visibility. Use for implementing UI flows that depend on backend contracts and must preserve secure admin behavior.
+tools: Read, Grep, Glob, Bash, Edit, Write
+model: sonnet
+---
+
+# Frontend Dashboard
+
+Read first:
+
+- `docs/ARCHITECTURE_SPEC.md`
+
+## Workflow
+
+1. Start from the backend contract.
+2. Design the minimum route and component tree.
+3. Keep token creation UX safe: reveal once, never re-fetch plaintext.
+4. Make tenant and project context visible in the UI.
+5. Add empty, loading, and error states.
+
+## Required screens
+
+- sign in
+- team switcher
+- projects list
+- token list and create/revoke flow
+- memory explorer and search
+- audit and diagnostics
+
+## Guardrails
+
+- do not invent parallel client-side authority rules
+- do not expose raw secrets after creation
+- do not couple search UI to provider-specific response shapes

@@ -1,0 +1,13 @@
+[package]
+name = "chum-mem-config"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[dependencies]
+chum-mem-contracts = { path = "../chum_mem_contracts" }
+serde.workspace = true
+thiserror.workspace = true
+url.workspace = true
+uuid.workspace = true

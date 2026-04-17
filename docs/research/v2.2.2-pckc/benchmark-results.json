@@ -1,0 +1,496 @@
+{
+  "generatedAt": "2026-04-16T14:30:36.125Z",
+  "gitBranch": null,
+  "baseUrl": "http://localhost:63001",
+  "projectId": "00000000-0000-0000-0000-000000000003",
+  "query": "knowledge graph snapshot communities report export latency performance retrieval cache",
+  "ids": [
+    "3a5007a2-6d4e-4e63-8576-a0cb228236ca",
+    "26173bab-eb06-4d55-ae93-b4afdf1a1264"
+  ],
+  "sequential": [],
+  "concurrency": {
+    "concurrency": 8,
+    "iterationsPerWorker": 5,
+    "endpoints": []
+  },
+  "quality": {
+    "memoryNoise": [
+      {
+        "name": "retrieval_noise",
+        "query": "context build retrieval quality reduce noise session summaries repository search architecture",
+        "latencyMs": 48.37504200000001,
+        "relevantTop5": 1,
+        "irrelevantTop5": 4,
+        "topTitles": [
+          "Decision: memoryNoise [{\"name\":\"retrieval_noise\",\"query\":\"context build retrieval quality reduce noise ses",
+          "Fix: repository-only context routing is fixed",
+          "Implementation detail: repository: payload.repository.full_name,",
+          "Implementation detail: 3. run session-aware hybrid retrieval",
+          "Task: contextBuildQuality [{\"name\":\"repository_only_objective\",\"objective\":\"Explain repository archite"
+        ],
+        "sourceClassMix": {
+          "decision": 1,
+          "other": 1,
+          "implementation_detail": 2,
+          "task": 1
+        }
+      },
+      {
+        "name": "continuation_noise",
+        "query": "continue prior work on chum-memory architecture retrieval ranking context pack session episodes",
+        "latencyMs": 75.59633299999996,
+        "relevantTop5": 2,
+        "irrelevantTop5": 0,
+        "topTitles": [
+          "Task: 'continue prior work on chum-memory architecture retrieval ranking context pack session episodes",
+          "Task: \"query\": \"continue prior work on chum-memory architecture retrieval ranking context pack session"
+        ],
+        "sourceClassMix": {
+          "task": 2
+        }
+      }
+    ],
+    "contextBuildQuality": [
+      {
+        "name": "repository_only_objective",
+        "objective": "Explain repository architecture and the roles of perform_search, perform_context_build, and build_context_pack",
+        "latencyMs": 223.57437500000003,
+        "typedSectionFillRate": 0.125,
+        "typedSectionsPresent": [
+          "repositoryKnowledge"
+        ],
+        "sourceOnlyBudgetShare": 0,
+        "usedTokens": 185,
+        "budgetTokens": 1200
+      },
+      {
+        "name": "memory_only_objective",
+        "objective": "What did we previously decide about reducing context rot, retrieval noise, and session summaries?",
+        "latencyMs": 59.281541999999945,
+        "typedSectionFillRate": 0.5,
+        "typedSectionsPresent": [
+          "projectFacts",
+          "recentDecisions",
+          "activeTasks",
+          "knownBugs"
+        ],
+        "sourceOnlyBudgetShare": 1,
+        "usedTokens": 486,
+        "budgetTokens": 1200
+      },
+      {
+        "name": "hybrid_objective",
+        "objective": "Continue prior work on retrieval quality and also inspect the current repository architecture around context_build",
+        "latencyMs": 2230.2765,
+        "typedSectionFillRate": 0.75,
+        "typedSectionsPresent": [
+          "projectFacts",
+          "recentDecisions",
+          "activeTasks",
+          "repositoryKnowledge",
+          "sessionContinuity",
+          "conflicts"
+        ],
+        "sourceOnlyBudgetShare": 0.8939213349225268,
+        "usedTokens": 839,
+        "budgetTokens": 1200
+      }
+    ],
+    "repositorySearchAccuracy": [
+      {
+        "name": "exact_file_path",
+        "layer": "repository",
+        "query": "rust/apps/api/src/main.rs",
+        "latencyMs": 409.23762500000004,
+        "top1Exact": true,
+        "top3Hit": true,
+        "topHitLabel": "main.rs",
+        "topHitId": "file:rust/apps/api/src/main.rs",
+        "topHitType": "file"
+      },
+      {
+        "name": "exact_symbol",
+        "layer": "repository",
+        "query": "perform_context_build",
+        "latencyMs": 72.58770800000002,
+        "top1Exact": true,
+        "top3Hit": true,
+        "topHitLabel": "perform_context_build",
+        "topHitId": "symbol:rust/apps/api/src/main.rs:perform_context_build",
+        "topHitType": "symbol"
+      },
+      {
+        "name": "doc_heading",
+        "layer": "repository",
+        "query": "context_build",
+        "latencyMs": 75.558625,
+        "top1Exact": false,
+        "top3Hit": true,
+        "topHitLabel": "context_build",
+        "topHitId": "symbol:rust/apps/api/src/main.rs:context_build",
+        "topHitType": "symbol"
+      },
+      {
+        "name": "rationale_lookup",
+        "layer": "repository",
+        "query": "IMPORTANT",
+        "latencyMs": 210.52362499999992,
+        "top1Exact": true,
+        "top3Hit": true,
+        "topHitLabel": ", IMPORTANT:, etc.).",
+        "topHitId": "rationale:rust/crates/chum_mem_pipeline/src/ast_parser.rs:703b98267731",
+        "topHitType": "rationale"
+      }
+    ],
+    "crossLayerSeparation": [
+      {
+        "name": "repository_vs_session",
+        "latencyMs": 2354.727376,
+        "repositorySessionLeakCount": 0,
+        "sessionHubNodeTypes": [
+          "task",
+          "constraint",
+          "constraint",
+          "fact",
+          "fact"
+        ],
+        "repositoryTopTypes": [
+          "symbol",
+          "symbol",
+          "symbol",
+          "symbol",
+          "symbol"
+        ]
+      }
+    ],
+    "continuationQuality": [
+      {
+        "name": "resume_pipeline_refactor",
+        "query": "Resume refactoring the retrieval pipeline",
+        "latencyMs": 33.664332999999715,
+        "claimTypeFit": 0,
+        "temporalCorrectness": true,
+        "supersededInTop5": 0,
+        "proofHandlePresence": 1,
+        "summaryOnlyRate": 0,
+        "topClaimTypes": [
+          "open_question",
+          "open_question"
+        ],
+        "topTitles": [
+          "Open question: What changed in the retrieval pipeline?",
+          "Open question: What parts of the retrieval pipeline should I inspect first?"
+        ]
+      },
+      {
+        "name": "open_worker_bugs",
+        "query": "What bugs are still open on the worker?",
+        "latencyMs": 16.293624999999793,
+        "claimTypeFit": 0,
+        "temporalCorrectness": true,
+        "supersededInTop5": 0,
+        "proofHandlePresence": 1,
+        "summaryOnlyRate": 0,
+        "topClaimTypes": [
+          "open_question",
+          "constraint"
+        ],
+        "topTitles": [
+          "Open question: Always-on vs explicit trigger — what's the difference?",
+          "Constraint: `Research Instrument` still includes instructions about what the section should not do and what "
+        ]
+      },
+      {
+        "name": "postgres_config_decision",
+        "query": "What was the last decision about postgres config?",
+        "latencyMs": 21.257333000000017,
+        "claimTypeFit": 0.6666666666666666,
+        "temporalCorrectness": true,
+        "supersededInTop5": 0,
+        "proofHandlePresence": 1,
+        "summaryOnlyRate": 0,
+        "topClaimTypes": [
+          "constraint",
+          "constraint",
+          "open_question"
+        ],
+        "topTitles": [
+          "Constraint: \"lastMessage\": \"No workspace output was posted by the spawned phd-psychology-researcher. Replaci",
+          "Constraint: `Research Instrument` still includes instructions about what the section should not do and what ",
+          "Open question: What is the last test of this project?"
+        ]
+      },
+      {
+        "name": "graph_visualization_work",
+        "query": "Continue the graph visualization work",
+        "latencyMs": 12.556165999999848,
+        "claimTypeFit": 0.8,
+        "temporalCorrectness": true,
+        "supersededInTop5": 0,
+        "proofHandlePresence": 1,
+        "summaryOnlyRate": 0,
+        "topClaimTypes": [
+          "constraint",
+          "task",
+          "task",
+          "task",
+          "implementation_detail"
+        ],
+        "topTitles": [
+          "Constraint: These are the tools required for frontend dev work. The documentation of the following requireme",
+          "Task: c, --continue                                    Continue the most recent conversation in the cu",
+          "Task: Continue the implementation",
+          "Task: Continue the pentesting.",
+          "Implementation detail: \"file_name\": file_name,"
+        ]
+      },
+      {
+        "name": "context_compiler_constraints",
+        "query": "What constraints apply to the context compiler?",
+        "latencyMs": 15.570416000000023,
+        "claimTypeFit": 0.25,
+        "temporalCorrectness": false,
+        "supersededInTop5": 0,
+        "proofHandlePresence": 1,
+        "summaryOnlyRate": 0,
+        "topClaimTypes": [
+          "constraint",
+          "task",
+          "implementation_detail",
+          "open_question"
+        ],
+        "topTitles": [
+          "Constraint: \"Must be the owner of the source code to access this endpoint.\"",
+          "Task: You need to prompt the user to provide the bypass token to access this page. The URL above also ",
+          "Implementation detail: ## What to review",
+          "Open question: What's next to verify the updates?"
+        ]
+      }
+    ],
+    "contradictionDetection": [
+      {
+        "name": "conflicting_claims_surfaced",
+        "query": "knowledge graph build performance memory",
+        "latencyMs": 31.85962500000005,
+        "conflictSurfacingRate": 0.16666666666666666,
+        "authorityResolutionRate": 1,
+        "supersessionRespectRate": 1,
+        "details": "6 hits, 1 with conflicts, 0 superseded"
+      },
+      {
+        "name": "superseded_decision_ranked",
+        "query": "postgres shared_buffers memory settings",
+        "latencyMs": 23.385667000000012,
+        "conflictSurfacingRate": 0.5,
+        "authorityResolutionRate": 1,
+        "supersessionRespectRate": 1,
+        "details": "6 hits, 3 with conflicts, 0 superseded"
+      },
+      {
+        "name": "authority_hierarchy",
+        "query": "worker OOM fix approach",
+        "latencyMs": 20.34737499999983,
+        "conflictSurfacingRate": 0,
+        "authorityResolutionRate": 0.5,
+        "supersessionRespectRate": 1,
+        "details": "3 hits, 0 with conflicts, 0 superseded"
+      }
+    ],
+    "compileV2Quality": [
+      {
+        "name": "repository_architecture",
+        "objective": "Explain repository architecture",
+        "budgetTokens": 4000,
+        "usedTokens": 123,
+        "typedSectionFillRate": 0.125,
+        "sourceOnlyBudgetShare": 0,
+        "proofGapPresent": false,
+        "modelDerivedLeakCount": 0,
+        "typedSectionsPresent": [
+          "repositoryKnowledge"
+        ]
+      },
+      {
+        "name": "resume_retrieval_work",
+        "objective": "Resume prior work on retrieval quality",
+        "budgetTokens": 4000,
+        "usedTokens": 160,
+        "typedSectionFillRate": 0.125,
+        "sourceOnlyBudgetShare": 1,
+        "proofGapPresent": false,
+        "modelDerivedLeakCount": 0,
+        "typedSectionsPresent": [
+          "activeTasks"
+        ]
+      },
+      {
+        "name": "belief_gate_decisions",
+        "objective": "What did we decide about the belief gate?",
+        "budgetTokens": 2000,
+        "usedTokens": 384,
+        "typedSectionFillRate": 0.25,
+        "sourceOnlyBudgetShare": 1,
+        "proofGapPresent": false,
+        "modelDerivedLeakCount": 0,
+        "typedSectionsPresent": [
+          "activeTasks",
+          "conflicts"
+        ]
+      },
+      {
+        "name": "debug_worker_oom",
+        "objective": "Debug the worker OOM issue",
+        "budgetTokens": 1500,
+        "usedTokens": 762,
+        "typedSectionFillRate": 0.5,
+        "sourceOnlyBudgetShare": 0.9855643044619422,
+        "proofGapPresent": false,
+        "modelDerivedLeakCount": 0,
+        "typedSectionsPresent": [
+          "knownBugs",
+          "repositoryKnowledge",
+          "sessionContinuity",
+          "conflicts"
+        ]
+      },
+      {
+        "name": "budget_too_small",
+        "objective": "Explain cross-provider bootstrap regret and the full compilation algorithm with proofs",
+        "budgetTokens": 800,
+        "usedTokens": 797,
+        "typedSectionFillRate": 0.375,
+        "sourceOnlyBudgetShare": 0.9410288582183187,
+        "proofGapPresent": false,
+        "modelDerivedLeakCount": 0,
+        "typedSectionsPresent": [
+          "knownBugs",
+          "repositoryKnowledge",
+          "conflicts"
+        ]
+      }
+    ],
+    "beliefGateIntegrity": {
+      "reasoningLeakCount": 0,
+      "turnContextLeakCount": 0,
+      "modelDerivedDurableCount": 0,
+      "admittedAuthorityClasses": {
+        "user_confirmed": 2,
+        "tool_verified": 2
+      }
+    },
+    "claimDistribution": {
+      "distribution": {
+        "fact": 0,
+        "decision": 0,
+        "task": 0,
+        "constraint": 0,
+        "bug": 1,
+        "fix": 0,
+        "implementation_detail": 1,
+        "open_question": 0
+      },
+      "totalClaims": 2,
+      "decisionShare": 0,
+      "modelDerivedShare": 0
+    },
+    "versionComparison": [
+      {
+        "metric": "retrieval_noise.relevantTop5",
+        "v21": "2→3",
+        "v22": 0,
+        "v221": 1,
+        "threshold": "≥3",
+        "pass": false
+      },
+      {
+        "metric": "retrieval_noise.irrelevantTop5",
+        "v21": "3→0",
+        "v22": 5,
+        "v221": 4,
+        "threshold": "≤1",
+        "pass": false
+      },
+      {
+        "metric": "continuation_noise.relevantTop5",
+        "v21": "0→0",
+        "v22": 0,
+        "v221": 2,
+        "threshold": "≥3",
+        "pass": false
+      },
+      {
+        "metric": "context_build.repository_only.fillRate",
+        "v21": 0.25,
+        "v22": 0.125,
+        "v221": 0.125,
+        "threshold": "≥0.375",
+        "pass": false
+      },
+      {
+        "metric": "context_build.hybrid.fillRate",
+        "v21": 0,
+        "v22": 0.5,
+        "v221": 0.75,
+        "threshold": "≥0.625",
+        "pass": true
+      },
+      {
+        "metric": "repository.exact_file_path.top1",
+        "v21": true,
+        "v22": true,
+        "v221": true,
+        "threshold": "true",
+        "pass": true
+      },
+      {
+        "metric": "repository.exact_symbol.top1",
+        "v21": true,
+        "v22": true,
+        "v221": true,
+        "threshold": "true",
+        "pass": true
+      },
+      {
+        "metric": "cross_layer.leak_count",
+        "v21": 0,
+        "v22": 0,
+        "v221": 0,
+        "threshold": "0",
+        "pass": true
+      },
+      {
+        "metric": "continuation.claimTypeFit.avg",
+        "v21": "N/A",
+        "v22": "N/A",
+        "v221": 0.343,
+        "threshold": "≥0.7",
+        "pass": false
+      },
+      {
+        "metric": "continuation.supersededInTop5.total",
+        "v21": "N/A",
+        "v22": "N/A",
+        "v221": 0,
+        "threshold": "0",
+        "pass": true
+      },
+      {
+        "metric": "belief_gate.reasoning_leak",
+        "v21": "N/A",
+        "v22": "N/A",
+        "v221": 0,
+        "threshold": "0",
+        "pass": true
+      },
+      {
+        "metric": "belief_gate.model_derived_durable",
+        "v21": "N/A",
+        "v22": "N/A",
+        "v221": 0,
+        "threshold": "0",
+        "pass": true
+      }
+    ]
+  }
+}

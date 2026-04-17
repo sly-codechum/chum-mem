@@ -1,0 +1,9 @@
+.git
+node_modules
+dist
+.next
+coverage
+tmp
+target
+rust/target
+.DS_Store

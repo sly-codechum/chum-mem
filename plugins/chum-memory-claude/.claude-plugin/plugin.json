@@ -1,0 +1,22 @@
+{
+  "name": "chum-memory",
+  "version": "0.1.0",
+  "description": "Persistent memory plugin for Claude Code backed by chum-memory-project MCP.",
+  "author": {
+    "name": "CodeChum",
+    "email": "support@codechum.com"
+  },
+  "homepage": "https://github.com/CodeChum/chum-memory-project",
+  "repository": "https://github.com/CodeChum/chum-memory-project",
+  "license": "MIT",
+  "keywords": [
+    "memory",
+    "mcp",
+    "claude-code",
+    "retrieval",
+    "codex",
+    "gemini"
+  ],
+  "skills": "./skills/",
+  "mcpServers": "./.mcp.json"
+}

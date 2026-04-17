@@ -1,0 +1,4 @@
+interface:
+  display_name: Frontend Dashboard
+  short_description: Build the web app for projects, tokens, memory, and audit views.
+  category: engineering

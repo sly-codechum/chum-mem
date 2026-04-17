@@ -1,0 +1,64 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|resume",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "CHUM_PROVIDER=codex CHUM_SCRIPTS_DIR=__SCRIPTS_DIR__ bash __SCRIPTS_DIR__/hook-dispatch.sh",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "CHUM_PROVIDER=codex CHUM_SCRIPTS_DIR=__SCRIPTS_DIR__ bash __SCRIPTS_DIR__/hook-dispatch.sh",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": ".*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "CHUM_PROVIDER=codex CHUM_SCRIPTS_DIR=__SCRIPTS_DIR__ bash __SCRIPTS_DIR__/hook-dispatch.sh",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": ".*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "CHUM_PROVIDER=codex CHUM_SCRIPTS_DIR=__SCRIPTS_DIR__ bash __SCRIPTS_DIR__/hook-dispatch.sh",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "CHUM_PROVIDER=codex CHUM_SCRIPTS_DIR=__SCRIPTS_DIR__ bash __SCRIPTS_DIR__/hook-dispatch.sh",
+            "timeout": 30
+          }
+        ]
+      }
+    ]
+  }
+}

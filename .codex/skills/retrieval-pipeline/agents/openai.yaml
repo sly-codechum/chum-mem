@@ -1,0 +1,4 @@
+interface:
+  display_name: Retrieval Pipeline
+  short_description: Build derivation, hybrid search, provenance, and context packaging.
+  category: engineering

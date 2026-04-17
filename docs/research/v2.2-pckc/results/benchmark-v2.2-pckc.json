@@ -1,0 +1,391 @@
+{
+  "generatedAt": "2026-04-15T02:28:08.182Z",
+  "gitBranch": "main",
+  "baseUrl": "http://127.0.0.1:65301",
+  "projectId": "00000000-0000-0000-0000-000000000003",
+  "query": "knowledge graph snapshot communities report export latency performance retrieval cache",
+  "ids": [
+    "d4484947-285b-4f2d-a20f-e16ff0021adc",
+    "313b5bdb-95aa-4b5d-9d0d-b305e9f6394e",
+    "1b12d405-a497-4954-b3b3-94ab41cb68b7"
+  ],
+  "sequential": [
+    {
+      "name": "health_check",
+      "method": "GET",
+      "path": "/health",
+      "iterations": 15,
+      "p50Ms": 1.6167909999999779,
+      "p95Ms": 2.873207999999977,
+      "p99Ms": 2.873207999999977,
+      "minMs": 0.9086250000000291,
+      "maxMs": 2.873207999999977,
+      "avgMs": 1.6830581999999898,
+      "statusCodes": [
+        200
+      ]
+    },
+    {
+      "name": "mem_search",
+      "method": "POST",
+      "path": "/api/search",
+      "iterations": 15,
+      "p50Ms": 38.54737499999999,
+      "p95Ms": 42.0865,
+      "p99Ms": 42.0865,
+      "minMs": 37.204124999999976,
+      "maxMs": 42.0865,
+      "avgMs": 38.88639439999999,
+      "statusCodes": [
+        200
+      ],
+      "sampleMetrics": {
+        "lexicalCount": 0,
+        "semanticCount": 5,
+        "latencyMs": 39
+      }
+    },
+    {
+      "name": "memory_get",
+      "method": "GET",
+      "path": "/api/memory/d4484947-285b-4f2d-a20f-e16ff0021adc",
+      "iterations": 15,
+      "p50Ms": 4.438541999999984,
+      "p95Ms": 5.507541999999944,
+      "p99Ms": 5.507541999999944,
+      "minMs": 3.406749999999988,
+      "maxMs": 5.507541999999944,
+      "avgMs": 4.484285999999989,
+      "statusCodes": [
+        200
+      ]
+    },
+    {
+      "name": "memory_get_batch",
+      "method": "POST",
+      "path": "/api/memory/batch",
+      "iterations": 15,
+      "p50Ms": 5.644874999999956,
+      "p95Ms": 8.050458000000162,
+      "p99Ms": 8.050458000000162,
+      "minMs": 5.082750000000033,
+      "maxMs": 8.050458000000162,
+      "avgMs": 5.764908200000013,
+      "statusCodes": [
+        200
+      ]
+    },
+    {
+      "name": "context_build",
+      "method": "POST",
+      "path": "/api/context/build",
+      "iterations": 15,
+      "p50Ms": 59.86241600000017,
+      "p95Ms": 78.46070799999984,
+      "p99Ms": 78.46070799999984,
+      "minMs": 56.32091700000001,
+      "maxMs": 78.46070799999984,
+      "avgMs": 62.65086666666666,
+      "statusCodes": [
+        200
+      ]
+    },
+    {
+      "name": "knowledge_query_hub_nodes",
+      "method": "POST",
+      "path": "/api/knowledge/query",
+      "iterations": 15,
+      "p50Ms": 56.499874999999975,
+      "p95Ms": 70.0265830000003,
+      "p99Ms": 70.0265830000003,
+      "minMs": 52.33833400000003,
+      "maxMs": 70.0265830000003,
+      "avgMs": 56.69482500000001,
+      "statusCodes": [
+        200
+      ]
+    },
+    {
+      "name": "knowledge_query_search",
+      "method": "POST",
+      "path": "/api/knowledge/query",
+      "iterations": 15,
+      "p50Ms": 56.25441699999965,
+      "p95Ms": 65.55654199999981,
+      "p99Ms": 65.55654199999981,
+      "minMs": 54.11512499999981,
+      "maxMs": 65.55654199999981,
+      "avgMs": 57.9015806,
+      "statusCodes": [
+        200
+      ]
+    },
+    {
+      "name": "knowledge_report",
+      "method": "GET",
+      "path": "/api/knowledge/report?projectId=00000000-0000-0000-0000-000000000003",
+      "iterations": 15,
+      "p50Ms": 57.22962499999994,
+      "p95Ms": 60.84004199999981,
+      "p99Ms": 60.84004199999981,
+      "minMs": 54.91991700000017,
+      "maxMs": 60.84004199999981,
+      "avgMs": 57.007372200000006,
+      "statusCodes": [
+        200
+      ]
+    },
+    {
+      "name": "knowledge_graph_export",
+      "method": "GET",
+      "path": "/api/knowledge/export?projectId=00000000-0000-0000-0000-000000000003",
+      "iterations": 15,
+      "p50Ms": 92.2338749999999,
+      "p95Ms": 95.49587499999961,
+      "p99Ms": 95.49587499999961,
+      "minMs": 86.93254200000047,
+      "maxMs": 95.49587499999961,
+      "avgMs": 91.37800026666676,
+      "statusCodes": [
+        200
+      ]
+    },
+    {
+      "name": "knowledge_communities",
+      "method": "GET",
+      "path": "/api/knowledge/communities?projectId=00000000-0000-0000-0000-000000000003",
+      "iterations": 15,
+      "p50Ms": 48.77387499999986,
+      "p95Ms": 51.156332999999904,
+      "p99Ms": 51.156332999999904,
+      "minMs": 46.61920800000007,
+      "maxMs": 51.156332999999904,
+      "avgMs": 48.73468066666677,
+      "statusCodes": [
+        200
+      ]
+    }
+  ],
+  "concurrency": {
+    "concurrency": 8,
+    "iterationsPerWorker": 5,
+    "endpoints": [
+      {
+        "name": "mem_search",
+        "method": "POST",
+        "path": "/api/search",
+        "iterations": 40,
+        "p50Ms": 47.38945800000056,
+        "p95Ms": 60.55412499999966,
+        "p99Ms": 66.99579199999971,
+        "minMs": 8.914416000000529,
+        "maxMs": 66.99579199999971,
+        "avgMs": 43.42875625000001,
+        "statusCodes": [
+          200
+        ],
+        "sampleMetrics": {
+          "lexicalCount": 0,
+          "semanticCount": 5,
+          "latencyMs": 38
+        }
+      },
+      {
+        "name": "memory_get_batch",
+        "method": "POST",
+        "path": "/api/memory/batch",
+        "iterations": 40,
+        "p50Ms": 14.164040999999997,
+        "p95Ms": 15.354957999999897,
+        "p99Ms": 15.688415999999961,
+        "minMs": 7.866125000000466,
+        "maxMs": 15.688415999999961,
+        "avgMs": 13.65225409999989,
+        "statusCodes": [
+          200
+        ]
+      },
+      {
+        "name": "knowledge_query_hub_nodes",
+        "method": "POST",
+        "path": "/api/knowledge/query",
+        "iterations": 40,
+        "p50Ms": 845.9890839999989,
+        "p95Ms": 923.1773750000011,
+        "p99Ms": 939.9442909999998,
+        "minMs": 181.05566699999963,
+        "maxMs": 939.9442909999998,
+        "avgMs": 824.4676197750001,
+        "statusCodes": [
+          200
+        ]
+      },
+      {
+        "name": "knowledge_report",
+        "method": "GET",
+        "path": "/api/knowledge/report?projectId=00000000-0000-0000-0000-000000000003",
+        "iterations": 40,
+        "p50Ms": 781.3762500000012,
+        "p95Ms": 842.3714579999996,
+        "p99Ms": 851.9793339999997,
+        "minMs": 366.87333299999955,
+        "maxMs": 851.9793339999997,
+        "avgMs": 763.0993062250002,
+        "statusCodes": [
+          200
+        ]
+      }
+    ]
+  },
+  "quality": {
+    "memoryNoise": [
+      {
+        "name": "retrieval_noise",
+        "query": "context build retrieval quality reduce noise session summaries repository search architecture",
+        "latencyMs": 70.2064169999976,
+        "relevantTop5": 0,
+        "irrelevantTop5": 5,
+        "topTitles": [
+          "Bug: 74.92 > Build error occurred",
+          "Bug: Error: Turbopack build failed with 1 errors:",
+          "Open question: 1. **API side** (`rust/apps/api/src/main.rs`): How does the `project_import` endpoint call `buil",
+          "Open question: What's next should we run docker build?",
+          "Fix: Race condition causing F:0 D:0 in 3D graph**: The worker's `build-knowledge-graph` job (triggere"
+        ],
+        "sourceClassMix": {
+          "bug": 2,
+          "other": 3
+        }
+      },
+      {
+        "name": "continuation_noise",
+        "query": "continue prior work on chum-memory architecture retrieval ranking context pack session episodes",
+        "latencyMs": 51.16962500000227,
+        "relevantTop5": 0,
+        "irrelevantTop5": 5,
+        "topTitles": [
+          "Constraint: The skills and hooks must be precised on what to query that doesn't rely on user prompts like th",
+          "Task: Thoroughly explore the Gemini extension for chum-memory. I need to understand:",
+          "Bug: Knowledge graph node types (16 types): memory, session, episode, file, document, section, module",
+          "Bug: <local-command-stdout>Failed to reconnect to chum-memory.</local-command-stdout>",
+          "Constraint: Continue the conversation from where it left off without asking the user any further questions. "
+        ],
+        "sourceClassMix": {
+          "other": 2,
+          "task": 1,
+          "bug": 2
+        }
+      }
+    ],
+    "contextBuildQuality": [
+      {
+        "name": "repository_only_objective",
+        "objective": "Explain repository architecture and the roles of perform_search, perform_context_build, and build_context_pack",
+        "latencyMs": 100.01504100000238,
+        "typedSectionFillRate": 0.125,
+        "typedSectionsPresent": [
+          "repositoryKnowledge"
+        ],
+        "sourceOnlyBudgetShare": 0,
+        "usedTokens": 320,
+        "budgetTokens": 1200
+      },
+      {
+        "name": "memory_only_objective",
+        "objective": "What did we previously decide about reducing context rot, retrieval noise, and session summaries?",
+        "latencyMs": 96.32908300000054,
+        "typedSectionFillRate": 0.375,
+        "typedSectionsPresent": [
+          "activeTasks",
+          "knownBugs",
+          "conflicts"
+        ],
+        "sourceOnlyBudgetShare": 1,
+        "usedTokens": 238,
+        "budgetTokens": 1200
+      },
+      {
+        "name": "hybrid_objective",
+        "objective": "Continue prior work on retrieval quality and also inspect the current repository architecture around context_build",
+        "latencyMs": 799.8500000000022,
+        "typedSectionFillRate": 0.5,
+        "typedSectionsPresent": [
+          "activeTasks",
+          "repositoryKnowledge",
+          "sessionContinuity",
+          "conflicts"
+        ],
+        "sourceOnlyBudgetShare": 0.7854545454545454,
+        "usedTokens": 825,
+        "budgetTokens": 1200
+      }
+    ],
+    "repositorySearchAccuracy": [
+      {
+        "name": "exact_file_path",
+        "layer": "repository",
+        "query": "rust/apps/api/src/main.rs",
+        "latencyMs": 278.21458399999756,
+        "top1Exact": true,
+        "top3Hit": true,
+        "topHitLabel": "main.rs",
+        "topHitId": "file:rust/apps/api/src/main.rs",
+        "topHitType": "file"
+      },
+      {
+        "name": "exact_symbol",
+        "layer": "repository",
+        "query": "perform_context_build",
+        "latencyMs": 330.06216700000004,
+        "top1Exact": true,
+        "top3Hit": true,
+        "topHitLabel": "perform_context_build",
+        "topHitId": "symbol:rust/apps/api/src/main.rs:perform_context_build",
+        "topHitType": "symbol"
+      },
+      {
+        "name": "doc_heading",
+        "layer": "repository",
+        "query": "context_build",
+        "latencyMs": 233.03395799999998,
+        "top1Exact": false,
+        "top3Hit": true,
+        "topHitLabel": "context_build",
+        "topHitId": "symbol:rust/apps/api/src/main.rs:context_build",
+        "topHitType": "symbol"
+      },
+      {
+        "name": "rationale_lookup",
+        "layer": "repository",
+        "query": "IMPORTANT",
+        "latencyMs": 51.818624999999884,
+        "top1Exact": true,
+        "top3Hit": true,
+        "topHitLabel": ", IMPORTANT:, etc.).",
+        "topHitId": "rationale:rust/crates/chum_mem_pipeline/src/ast_parser.rs:703b98267731",
+        "topHitType": "rationale"
+      }
+    ],
+    "crossLayerSeparation": [
+      {
+        "name": "repository_vs_session",
+        "latencyMs": 822.3136239999985,
+        "repositorySessionLeakCount": 0,
+        "sessionHubNodeTypes": [
+          "session",
+          "session",
+          "session",
+          "session",
+          "constraint"
+        ],
+        "repositoryTopTypes": [
+          "symbol",
+          "symbol",
+          "symbol",
+          "symbol",
+          "symbol"
+        ]
+      }
+    ]
+  }
+}

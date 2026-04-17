@@ -1,0 +1,4 @@
+interface:
+  display_name: Postgres DB Engineer
+  short_description: Design schemas, tune queries, locks, vacuum, WAL, and pgvector indexes.
+  category: engineering

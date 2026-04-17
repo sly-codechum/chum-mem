@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "chum-memory": {
+      "type": "http",
+      "url": "http://localhost:63001/mcp"
+    }
+  }
+}
