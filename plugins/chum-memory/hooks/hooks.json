@@ -2,11 +2,11 @@
   "hooks": {
     "SessionStart": [
       {
-        "matcher": "",
+        "matcher": "startup|resume",
         "hooks": [
           {
             "type": "command",
-            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/scripts/hook-dispatch.sh\"",
+            "command": "CHUM_PROVIDER=codex CHUM_SCRIPTS_DIR=\"${CODEX_HOME:-$HOME/.codex}/chum-memory-scripts\" bash \"${CODEX_HOME:-$HOME/.codex}/chum-memory-scripts/hook-dispatch.sh\"",
             "timeout": 30
           }
         ]
@@ -18,55 +18,31 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/scripts/hook-dispatch.sh\"",
+            "command": "CHUM_PROVIDER=codex CHUM_SCRIPTS_DIR=\"${CODEX_HOME:-$HOME/.codex}/chum-memory-scripts\" bash \"${CODEX_HOME:-$HOME/.codex}/chum-memory-scripts/hook-dispatch.sh\"",
             "timeout": 30
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": ".*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "CHUM_PROVIDER=codex CHUM_SCRIPTS_DIR=\"${CODEX_HOME:-$HOME/.codex}/chum-memory-scripts\" bash \"${CODEX_HOME:-$HOME/.codex}/chum-memory-scripts/hook-dispatch.sh\"",
+            "timeout": 10
           }
         ]
       }
     ],
     "PostToolUse": [
       {
-        "matcher": "",
+        "matcher": ".*",
         "hooks": [
           {
             "type": "command",
-            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/scripts/hook-dispatch.sh\"",
-            "timeout": 10
-          }
-        ]
-      }
-    ],
-    "Notification": [
-      {
-        "matcher": "",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/scripts/hook-dispatch.sh\"",
-            "timeout": 10
-          }
-        ]
-      }
-    ],
-    "PreCompact": [
-      {
-        "matcher": "",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/scripts/hook-dispatch.sh\"",
-            "timeout": 10
-          }
-        ]
-      }
-    ],
-    "SubagentStop": [
-      {
-        "matcher": "",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/scripts/hook-dispatch.sh\"",
+            "command": "CHUM_PROVIDER=codex CHUM_SCRIPTS_DIR=\"${CODEX_HOME:-$HOME/.codex}/chum-memory-scripts\" bash \"${CODEX_HOME:-$HOME/.codex}/chum-memory-scripts/hook-dispatch.sh\"",
             "timeout": 10
           }
         ]
@@ -78,19 +54,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/scripts/hook-dispatch.sh\"",
-            "timeout": 30
-          }
-        ]
-      }
-    ],
-    "SessionEnd": [
-      {
-        "matcher": "",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/scripts/hook-dispatch.sh\"",
+            "command": "CHUM_PROVIDER=codex CHUM_SCRIPTS_DIR=\"${CODEX_HOME:-$HOME/.codex}/chum-memory-scripts\" bash \"${CODEX_HOME:-$HOME/.codex}/chum-memory-scripts/hook-dispatch.sh\"",
             "timeout": 30
           }
         ]
