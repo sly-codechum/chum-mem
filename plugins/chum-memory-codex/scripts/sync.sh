@@ -148,7 +148,7 @@ if echo "$RESULT" | grep -q '"NO_CHANGES"'; then
   exit 0
 fi
 
-RESPONSE=$(curl -sf --max-time 120 \
+RESPONSE=$(curl -sf --max-time 20 \
   -X POST \
   -H "Content-Type: application/json" \
   -d @"$PAYLOAD_FILE" \

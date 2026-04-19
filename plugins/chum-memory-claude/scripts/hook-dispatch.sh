@@ -45,6 +45,17 @@ fi
 export CLAUDE_PROJECT_DIR="$PROJECT_DIR"
 export CHUM_PROVIDER="$PROVIDER"
 
+# ── Fast health gate — bail immediately if API is unreachable ──
+API_URL="${CHUM_MEMORY_API_URL:-http://localhost:63001}"
+if ! curl -sf --max-time 2 "${API_URL}/health" >/dev/null 2>&1; then
+  UNAVAIL_MSG="ChumMemory API unreachable at ${API_URL} — memory features unavailable this turn."
+  case "$PROVIDER" in
+    codex) printf '{"systemMessage":"%s"}\n' "$UNAVAIL_MSG" ;;
+    *)     printf '{"hookSpecificOutput":{"hookEventName":"%s","additionalContext":"%s"}}\n' "$HOOK_EVENT" "$UNAVAIL_MSG" ;;
+  esac
+  exit 0
+fi
+
 # ── Session layer (always runs for every event) ──
 SESSION_STDERR=""
 if [[ -x "${SCRIPTS_DIR}/session-sync.sh" ]]; then
@@ -84,7 +95,7 @@ SESSION_START_BASE="ChumMemory plugin active (PCKC v2.2.3, MCP server: chum-memo
 fetch_knowledge_report_escaped() {
   local api_url="${CHUM_MEMORY_API_URL:-http://localhost:63001}"
   local report=""
-  report=$(curl -sf --max-time 15 "${api_url}/api/knowledge/report?layer=repository" 2>/dev/null) || return 1
+  report=$(curl -sf --max-time 5 "${api_url}/api/knowledge/report?layer=repository" 2>/dev/null) || return 1
   echo "$report" | python3 -c "
 import sys, json
 try:
