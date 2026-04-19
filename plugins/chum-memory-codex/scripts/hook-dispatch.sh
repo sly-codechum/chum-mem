@@ -69,14 +69,33 @@ emit_claude() {
 }
 
 emit_codex() {
-  # Codex reads `systemMessage` from stdout JSON. Keep it short so it isn't
-  # injected verbatim into every turn.
   local message="$1"
   printf '{"systemMessage":"%s"}\n' "$message"
 }
 
-USER_PROMPT_MSG="ChumMemory graph is fresh (PCKC v2.2.2). For any code-navigation or recall step, CALL knowledge_query(search, layer:repository) AND mem_search in parallel BEFORE any Read/Grep/Glob/Edit. Before editing a file, CALL knowledge_query(neighbors, nodeId:'file:<path>', layer:repository) first. Grep/Glob is fallback only. Three-way hybrid search: lexical + pgvector + Chroma ML. Reports are graphify-style markdown. Load the ChumMemory skill for the full cookbook if unsure."
-SESSION_START_MSG="ChumMemory plugin active (PCKC v2.2.2, MCP server: chum-memory). The hook auto-runs repository_sync before every turn — do NOT call project_import or repository_sync manually. On every code-related prompt: knowledge_query(search, layer:repository) + mem_search in parallel first; Grep/Glob is the fallback only. Two layers: repository (code structure, AST) and session (interaction history). Always pass layer. Three-way hybrid search (lexical + pgvector + Chroma). Typed partitions for per-type precision. Hierarchical communities (level-0 + level-1). Load the ChumMemory skill for the full cookbook and decision tree."
+USER_PROMPT_MSG="ChumMemory graph is fresh (PCKC v2.2.3). For any code-navigation or recall step, CALL knowledge_query(search, layer:repository) AND mem_search in parallel BEFORE any Read/Grep/Glob/Edit. Before editing a file, CALL knowledge_query(neighbors, nodeId:'file:<path>', layer:repository) first. Grep/Glob is fallback only. Three-way hybrid search: lexical + pgvector + Chroma ML. Reports are graphify-style markdown. Load the ChumMemory skill for the full cookbook if unsure."
+SESSION_START_BASE="ChumMemory plugin active (PCKC v2.2.3, MCP server: chum-memory). The hook auto-runs repository_sync before every turn — do NOT call project_import or repository_sync manually. On every code-related prompt: knowledge_query(search, layer:repository) + mem_search in parallel first; Grep/Glob is the fallback only. Two layers: repository (code structure, AST) and session (interaction history). Always pass layer. Three-way hybrid search (lexical + pgvector + Chroma). Typed partitions for per-type precision. Hierarchical communities (level-0 + level-1). Governance: use claim_govern to pin/archive/reject claims. Load the ChumMemory skill for the full cookbook and decision tree."
+
+# ── Fetch knowledge report on session start for codebase context ──
+fetch_knowledge_report_escaped() {
+  local api_url="${CHUM_MEMORY_API_URL:-http://localhost:63001}"
+  local report=""
+  report=$(curl -sf --max-time 15 "${api_url}/api/knowledge/report?layer=repository" 2>/dev/null) || return 1
+  echo "$report" | python3 -c "
+import sys, json
+try:
+    data = json.load(sys.stdin)
+    r = data.get('report', '')
+    if isinstance(r, dict):
+        r = r.get('markdown', '') or r.get('report', '')
+    if len(r) > 2000:
+        r = r[:2000] + '\n... (truncated, use knowledge_report for full)'
+    r = r.replace('\\\\', '\\\\\\\\').replace('\"', '\\\\\"').replace('\n', '\\\\n').replace('\t', '\\\\t')
+    print(r, end='')
+except:
+    pass
+" 2>/dev/null || echo ""
+}
 
 case "$HOOK_EVENT" in
   UserPromptSubmit)
@@ -87,6 +106,12 @@ case "$HOOK_EVENT" in
     fi
     ;;
   SessionStart)
+    KB_REPORT=$(fetch_knowledge_report_escaped 2>/dev/null || echo "")
+    if [[ -n "$KB_REPORT" ]]; then
+      SESSION_START_MSG="${SESSION_START_BASE}\\n\\n--- Repository Knowledge Report ---\\n${KB_REPORT}"
+    else
+      SESSION_START_MSG="$SESSION_START_BASE"
+    fi
     if [[ "$PROVIDER" == "codex" ]]; then
       emit_codex "$SESSION_START_MSG"
     else

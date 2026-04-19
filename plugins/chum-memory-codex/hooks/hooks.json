@@ -7,7 +7,7 @@
           {
             "type": "command",
             "command": "CHUM_PROVIDER=codex CHUM_SCRIPTS_DIR=\"${CODEX_HOME:-$HOME/.codex}/chum-memory-scripts\" bash \"${CODEX_HOME:-$HOME/.codex}/chum-memory-scripts/hook-dispatch.sh\"",
-            "timeout": 30
+            "timeout": 60
           }
         ]
       }

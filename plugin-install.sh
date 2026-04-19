@@ -24,7 +24,7 @@ fi
 
 case "$CLIENT" in
   codex)
-    exec bash "$REPO_ROOT/plugins/chum-memory/scripts/install-mcp.sh" "$PROFILE"
+    exec bash "$REPO_ROOT/plugins/chum-memory-codex/scripts/install.sh" "$PROFILE"
     ;;
   claude)
     exec bash "$REPO_ROOT/plugins/chum-memory-claude/scripts/install.sh" "$PROFILE"

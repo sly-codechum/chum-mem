@@ -1,9 +1,9 @@
 ---
 name: chum-memory
-description: "Always-on knowledge graph and memory retrieval for code work. USE on every prompt that touches code — finding symbols, tracing imports, understanding architecture, recalling past decisions, debugging, refactoring. Replaces grep/glob for anything tree-sitter can parse. Two layers: repository (code structure) and session (interaction history). The plugin hook keeps the graph fresh before each turn — no manual import needed. PCKC v2.2.2 model: claims are the unit of memory, proof is the unit of trust, compiled minimal proof sets are the unit of context. Three-way hybrid search: lexical + pgvector ANN + Chroma ML. Graphify-style markdown reports."
+description: "Always-on knowledge graph and memory retrieval for code work. USE on every prompt that touches code — finding symbols, tracing imports, understanding architecture, recalling past decisions, debugging, refactoring. Replaces grep/glob for anything tree-sitter can parse. Two layers: repository (code structure) and session (interaction history). The plugin hook keeps the graph fresh before each turn — no manual import needed. PCKC v2.2.3 model: claims are the unit of memory, proof is the unit of trust, compiled minimal proof sets are the unit of context. Three-way hybrid search: lexical + pgvector ANN + Chroma ML. Graphify-style markdown reports."
 ---
 
-# ChumMemory (PCKC v2.2.2)
+# ChumMemory (PCKC v2.2.3)
 
 The plugin hook runs `sync.sh` on every `UserPromptSubmit`, so the repository graph is **already fresh** when your turn starts. Your job is to **query the graph instead of grepping**, then read the files the graph points to — and when you recall memory, **read proof, not prose**.
 
@@ -16,7 +16,7 @@ If you catch yourself about to Read or Grep without having queried first → sto
 
 ---
 
-## What PCKC v2.2.2 means for your turn
+## What PCKC v2.2.3 means for your turn
 
 The runtime uses a **Proof-Carrying Knowledge Compiler** with three-way hybrid search. Three units change:
 
@@ -26,7 +26,7 @@ The runtime uses a **Proof-Carrying Knowledge Compiler** with three-way hybrid s
 | Trust | "where did this come from" | **proof** (`authority_class`, `verification_status`, `proof_type`, `source_ref`, `excerpt`, `freshness`) |
 | Context | top-k similar text | **compiled minimal proof set** (smallest set of current-valid claims whose proof is sufficient to answer) |
 
-### v2.2.2 Architecture
+### v2.2.3 Architecture
 
 - **Three-way hybrid search**: lexical (PostgreSQL FTS) + pgvector ANN + Chroma ML embeddings, merged and ranked together. Chroma is a primary source, not a fallback.
 - **Ranking weights**: semantic 30% + lexical 32% + session relevance 12% + graph proximity 10% + recency/importance/confidence 22%. Content match dominates.
@@ -35,6 +35,9 @@ The runtime uses a **Proof-Carrying Knowledge Compiler** with three-way hybrid s
 - **Graphify-style reports**: `knowledge_report` returns markdown with one-line extraction summary, god nodes, node/edge type distributions, and community hierarchy.
 - **Community cache**: 5-minute TTL, project-scoped. First query loads the session graph (~800ms), subsequent queries use cached community maps (<100ms).
 - **Soft type filter**: when `types` are requested, matching results are preferred. If no exact matches exist, unfiltered results are returned rather than empty.
+- **Deterministic governance**: claims have a `governanceState` field (active/pinned/archived/rejected). Pinned claims get a +0.20 ranking boost; archived (-0.50) and rejected (-0.80) are excluded from default search. Use `claim_govern` to transition states with an optional reason for audit.
+- **Continuation retrieval**: queries like "continue prior work" automatically boost unsuperseded actionable claims (task, decision, open_question) and penalize superseded ones. The ranker detects 17 continuation signal phrases.
+- **Session-start knowledge report**: the hook fetches `knowledge_report(layer:repository)` on `SessionStart` and injects a truncated codebase overview into the session context, so you start every conversation knowing the project shape.
 
 Practical consequences for a turn:
 
@@ -60,6 +63,8 @@ Practical consequences for a turn:
 | Pull a specific past session | `mem_search(query, sessionId, disclosureLevel:"full")` |
 | Check if a belief has been superseded | `mem_search(query, mode:"hybrid", includeHistorical:true)` and read `superseded_by` / `valid_to` |
 | Build a token-budgeted context pack | `context_build(provider, objective, maxTokenBudget)` |
+| Pin / archive / reject a claim | `claim_govern(claimId, newState, reason?)` — accepts memory ID or claim ID |
+| Continue prior work | `mem_search(query:"continue prior work", mode:"hybrid")` — continuation boost auto-applied |
 | **Edit a file** | `knowledge_query(neighbors, nodeId:"file:<path>")` first, *then* Edit |
 
 ---
@@ -102,6 +107,16 @@ PARALLEL:
 knowledge_query(query:"hub_nodes", layer:"repository")
 ```
 
+**"Pin this decision so it always surfaces"** (governance mode)
+```
+claim_govern(claimId:"<memory-or-claim-id>", newState:"pinned", reason:"Critical architectural decision — must surface on related queries")
+```
+
+**"This claim is wrong, remove it from search"**
+```
+claim_govern(claimId:"<memory-or-claim-id>", newState:"rejected", reason:"Hallucinated by model — contradicted by test results")
+```
+
 **"I'm about to refactor `client.ts` — what depends on it?"**
 ```
 knowledge_query(query:"neighbors", nodeId:"file:packages/db/src/client.ts", layer:"repository", depth:3)
@@ -126,6 +141,7 @@ Every `mem_search` hit carries structured trust signals. **Read them, don't skip
 - `proofHandles[]` — each entry is `{proofType, sourceRef, excerpt, authorityClass, verificationStatus}`. For any **answer-critical** claim, open at least one proof handle (via `memory_get` or by reading the `sourceRef` file) and quote the excerpt.
 - `provenance[]` — lineage, not proof. Use it for tracing, not for authority.
 - `validFrom` / `valid_to` / `superseded_by` — temporal validity. A claim past `valid_to` or with a `superseded_by` target is **stale by default**.
+- `governanceState` — `active | pinned | archived | rejected`. Pinned claims are operator-prioritized; archived/rejected are excluded from default search. Respect governance intent — don't fight a pinned claim's prominence or resurrect a rejected one.
 
 Rule of thumb: if a hit has `activeConflictCount > 0`, or `verificationStatus != verified`, or a non-empty `supersededPenalty` — **caveat or refuse**, never silently cite.
 
@@ -197,6 +213,12 @@ The host hook (Claude Code or Codex) calls `session_start` → `session_event_ap
 - `memory_get(id*)` — single fetch, returns full proof object
 - `memory_get_batch(ids* [1–20])` — **always prefer over loops**
 - `context_build(provider*, objective*, maxTokenBudget*≤64000, filePaths, repoUrl, branch)` — compiles a minimal proof set for the objective
+
+**Governance**
+- `claim_govern(claimId*, newState*, reason?)` — transition a claim's governance state. Accepts memory ID or claim ID.
+  - `newState`: `active` (reactivate) | `pinned` (boost +0.20, always surface) | `archived` (hide from search, preserve history) | `rejected` (hide from search, mark as incorrect)
+  - Writes an audit row to `claim_governance_history` with actor, previous state, and reason
+  - Pinned claims float to the top of relevant queries; archived/rejected are excluded from default search SQL
 
 **Knowledge graph**
 - `knowledge_query(query*={hub_nodes|shortest_path|neighbors|communities|search|goal_directed}, layer*={repository|session}, nodeId, targetNodeId, text, depth=1..5)`
