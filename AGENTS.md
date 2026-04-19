@@ -4,7 +4,7 @@ This repository is built with Codex using parallel agents. Treat this file as th
 
 ## Product summary
 
-`chum-mem` is a cloud-native persistent memory system for coding agents. It supports Claude, Codex, and Gemini clients and uses PostgreSQL, pgvector, and Chroma-backed hybrid retrieval. The current architecture is the v2.2.2 PCKC runtime:
+`chum-mem` is a cloud-native persistent memory system for coding agents. It supports Claude, Codex, and Gemini clients and uses PostgreSQL, pgvector, and Chroma-backed hybrid retrieval. The current architecture is the v2.2.3 PCKC runtime:
 
 - claims are the unit of memory
 - proof is the unit of trust
@@ -29,8 +29,8 @@ Use these files first:
 1. `docs/INSTRUCTION.md`
 2. `docs/ARCHITECTURE_SPEC.md`
 3. this `AGENTS.md`
-4. `docs/research/v2.2.2-pckc/README.md`
-5. `docs/research/v2.2.2-pckc/DESIGN.md`
+4. `docs/research/v2.2.3-pckc/README.md`
+5. `docs/research/v2.2.2-pckc/README.md`
 6. `docs/research/v2.2.2-pckc/results/COMPARISON.md`
 7. relevant skill in `.codex/skills/`
 8. relevant prompt in `.codex/prompts/`
@@ -77,7 +77,7 @@ Repository questions should default to repository truth. Session memory is a sec
 
 ## PCKC expectations
 
-v2.2.2 is not generic summary memory. It is a proof-carrying claim system.
+v2.2.3 is not generic summary memory. It is a proof-carrying claim system with deterministic governance.
 
 Key operational rules:
 
@@ -88,10 +88,12 @@ Key operational rules:
 - surface conflicts explicitly; do not silently average contradictory claims
 - use `context_compile_v2` when hard budget discipline and proof-gap signaling matter
 - use `knowledge_report` and `knowledge_query` for graph-native reasoning before falling back to grep
+- governance states (active/pinned/archived/rejected) are deterministic operator controls; respect them in retrieval
+- pinned claims are elevated in ranking; archived/rejected claims are filtered from default search results
 
 ## Current architecture snapshot
 
-The applied v2.2.2 architecture includes:
+The applied v2.2.3 architecture includes:
 
 - typed claim extraction with authority and verification metadata
 - belief gate enforcement during derivation
@@ -101,13 +103,17 @@ The applied v2.2.2 architecture includes:
 - hierarchical Leiden communities with `level` and `community_path`
 - project-scoped community caching for graph-heavy queries
 - hard-budget minimal-proof compilation via `context_compile_v2`
-- unified knowledge reporting in runtime code, even if some older benchmark notes lag behind
+- continuation-aware ranking with `is_continuation` flag and actionable-claim boosting
+- section-aware context assembly with baseline queries for all 6 core section types
+- deterministic memory governance (active/pinned/archived/rejected) with audit history
+- governance-aware scoring in ranking and SQL-level filtering
+- cross-layer unified reporting via JSON response with `crossLayerSummary`
 
-Known active gaps from the latest benchmark/docs that may still drive implementation work:
+Known active gaps from the latest benchmark/docs:
 
-- continuation recall remains weaker than claim-type precision
-- typed section fill for context assembly still needs improvement
-- some research docs may lag behind runtime behavior
+- repository-only context fill rate remains at 0.125 (needs repository-derived claims or scaffolding)
+- continuation boost magnitudes are analytically tuned, not yet benchmark-validated
+- governance state in Chroma metadata is populated at index time only
 
 ## Expected repository layout
 

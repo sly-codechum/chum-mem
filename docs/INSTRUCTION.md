@@ -2,7 +2,7 @@
 
 Build `chum-mem` as a cloud-native persistent memory platform for coding agents.
 
-The current target is the v2.2.2 PCKC runtime:
+The current target is the v2.2.3 PCKC runtime:
 
 - claims are the unit of memory
 - proof is the unit of trust
@@ -88,7 +88,7 @@ The runtime uses two graph layers:
 - repository layer: code structure derived from repository sync and AST parsing
 - session layer: interaction history derived from session events, episodes, claims, tools, tests, and file changes
 
-v2.2.2 capabilities that must be preserved:
+v2.2.3 capabilities that must be preserved:
 
 - containment edges
 - cross-file call resolution
@@ -96,6 +96,10 @@ v2.2.2 capabilities that must be preserved:
 - hierarchical Leiden communities with `level` and `community_path`
 - graph-aware ranking
 - project-scoped graph/community caching
+- continuation-aware ranking (is_continuation flag, actionable-claim boosting)
+- section-aware context assembly (baseline queries for all 6 core section types)
+- deterministic memory governance (active/pinned/archived/rejected with audit history)
+- governance-aware scoring and SQL filtering
 
 ## Identity and access
 
@@ -115,6 +119,7 @@ Data model:
 - claim
 - claim_proof
 - claim_edge
+- claim_governance_history
 - knowledge_snapshot
 
 Rules:
