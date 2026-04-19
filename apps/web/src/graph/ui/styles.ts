@@ -680,6 +680,20 @@ select { cursor: pointer; }
 .graph-toolbar .path-btn:hover { background: rgba(255, 255, 255, 0.12); color: #e6edf3; }
 .graph-toolbar .path-btn.active { background: rgba(57, 217, 138, 0.15); color: #39d98a; border-color: #39d98a; }
 
+.graph-toolbar .project-select {
+  height: 24px;
+  padding: 0 6px;
+  font-size: 11px;
+  font-weight: 500;
+  background: #161b22;
+  color: #e6edf3;
+  border: 1px solid #30363d;
+  border-radius: 6px;
+  cursor: pointer;
+  max-width: 160px;
+}
+.graph-toolbar .project-select:focus { outline: none; border-color: #39d98a; }
+
 /* ── Node inspector ── */
 .node-inspector {
   position: absolute;

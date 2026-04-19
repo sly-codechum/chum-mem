@@ -408,6 +408,47 @@ app.get('/api/dashboard/workers', async (_req, res) => {
   }
 });
 
+// ── /api/projects — list non-global projects for the current org/team ──
+interface ProjectRow {
+  id: string;
+  name: string;
+  repo_url: string | null;
+  created_at: string;
+}
+
+app.get('/api/projects', async (_req, res) => {
+  try {
+    const rows: ProjectRow[] = await withRepositoryContext(sql, repoContext, async (tx: any): Promise<ProjectRow[]> => {
+      return (await tx`
+        SELECT
+          id::text        AS id,
+          name            AS name,
+          repo_url        AS repo_url,
+          created_at::text AS created_at
+        FROM public.projects
+        WHERE slug != 'global'
+        ORDER BY created_at DESC
+      `);
+    });
+
+    res.type('application/json').send(
+      JSON.stringify({
+        projects: rows.map((r) => ({
+          id: r.id,
+          name: r.name,
+          repoUrl: r.repo_url,
+          createdAt: r.created_at,
+        })),
+      }),
+    );
+  } catch (err) {
+    console.error('GET /api/projects failed', err);
+    res.status(500).type('application/json').send(
+      JSON.stringify({ error: 'Failed to list projects', detail: String(err) }),
+    );
+  }
+});
+
 app.listen(env.WEB_PORT, '0.0.0.0', () => {
   console.log(`chum-mem dashboard listening on 0.0.0.0:${env.WEB_PORT}`);
 });

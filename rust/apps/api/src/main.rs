@@ -2178,11 +2178,19 @@ async fn perform_dashboard_graph(
         ),
         Some("session") => (
             None,
-            load_latest_knowledge_graph_by_type(&mut tx, &context, Some("session")).await?,
+            if project_id.is_some() {
+                load_latest_knowledge_graph_by_type(&mut tx, &context, Some("session")).await?
+            } else {
+                load_merged_session_snapshots(&mut tx, &context).await?
+            },
         ),
         _ => (
             load_latest_knowledge_graph_by_type(&mut tx, &context, Some("repository")).await?,
-            load_latest_knowledge_graph_by_type(&mut tx, &context, Some("session")).await?,
+            if project_id.is_some() {
+                load_latest_knowledge_graph_by_type(&mut tx, &context, Some("session")).await?
+            } else {
+                load_merged_session_snapshots(&mut tx, &context).await?
+            },
         ),
     };
     let response = match (repo_snapshot, session_snapshot) {
@@ -4006,6 +4014,43 @@ async fn load_latest_knowledge_graph_by_type(
     serde_json::from_value(snapshot)
         .map(Some)
         .map_err(|error| DomainError::Internal(error.to_string()))
+}
+
+async fn load_merged_session_snapshots(
+    tx: &mut Transaction<'_, Postgres>,
+    context: &RepositoryContext,
+) -> Result<Option<KnowledgeGraph>, DomainError> {
+    let rows = sqlx::query(
+        r#"
+        select distinct on (project_id) snapshot
+        from public.knowledge_snapshots
+        where organization_id = $1
+          and team_id = $2
+          and snapshot_type = 'session'
+        order by project_id, created_at desc
+        "#,
+    )
+    .bind(context.organization_id)
+    .bind(context.team_id)
+    .fetch_all(&mut **tx)
+    .await
+    .map_err(DbError::from)?;
+
+    if rows.is_empty() {
+        return Ok(None);
+    }
+
+    let mut merged: Option<KnowledgeGraph> = None;
+    for row in rows {
+        let snapshot = row.try_get::<Value, _>("snapshot").map_err(DbError::from)?;
+        let graph: KnowledgeGraph = serde_json::from_value(snapshot)
+            .map_err(|error| DomainError::Internal(error.to_string()))?;
+        merged = Some(match merged {
+            Some(base) => merge_graphs(&base, &graph),
+            None => graph,
+        });
+    }
+    Ok(merged)
 }
 
 async fn load_latest_snapshot_artifacts_by_type(

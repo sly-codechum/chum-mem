@@ -42,6 +42,8 @@ export class GraphPanel extends Panel {
 
   private visibleCategories = new Set<string>(CATEGORY_FILTERS.map(([, , k]) => k));
   private currentLayer: Layer = 'session';
+  private currentProjectId: string | undefined = undefined;
+  private projects: { id: string; name: string }[] = [];
   private pathState: PathState = { active: false, source: null };
   private mounted = false;
 
@@ -116,7 +118,7 @@ export class GraphPanel extends Panel {
     this.mounted = true;
     this.buildOverlays();
     this.buildEngine();
-    void this.loadGraph();
+    void this.fetchProjectsThenLoad();
   }
 
   unmount(): void {
@@ -348,6 +350,21 @@ export class GraphPanel extends Panel {
     }
     toolbar.appendChild(layerGroup);
 
+    // Project selector
+    const projectSelect = document.createElement('select');
+    projectSelect.className = 'project-select';
+    projectSelect.title = 'Project scope';
+    const allOption = document.createElement('option');
+    allOption.value = '';
+    allOption.textContent = 'All projects';
+    projectSelect.appendChild(allOption);
+    projectSelect.addEventListener('change', () => {
+      this.currentProjectId = projectSelect.value || undefined;
+      bus.emit('project-change', { projectId: this.currentProjectId });
+      void this.reloadGraph(this.currentLayer);
+    });
+    toolbar.appendChild(projectSelect);
+
     // Separator
     const sep2 = document.createElement('div');
     sep2.className = 'toolbar-sep';
@@ -425,11 +442,35 @@ export class GraphPanel extends Panel {
     });
   }
 
+  private async fetchProjectsThenLoad(): Promise<void> {
+    try {
+      const data = await ApiClient.getProjects() as { projects?: { id: string; name: string }[] } | null;
+      this.projects = data?.projects ?? [];
+      const select = this.toolbar?.querySelector<HTMLSelectElement>('.project-select');
+      if (select) {
+        while (select.options.length > 1) select.remove(1);
+        for (const p of this.projects) {
+          const opt = document.createElement('option');
+          opt.value = p.id;
+          opt.textContent = p.name;
+          select.appendChild(opt);
+        }
+        if (this.projects.length === 1) {
+          this.currentProjectId = this.projects[0]!.id;
+          select.value = this.currentProjectId;
+        }
+      }
+    } catch {
+      // Projects list unavailable — graph will load without project scope
+    }
+    void this.loadGraph();
+  }
+
   private async loadGraph(): Promise<void> {
     if (!this.engine) return;
     this.showLoading('Fetching graph data...');
     try {
-      const payload = await ApiClient.getGraph(this.currentLayer) as GraphApiPayload | null;
+      const payload = await ApiClient.getGraph(this.currentLayer, this.currentProjectId) as GraphApiPayload | null;
       if (!payload) throw new Error('No payload');
       this.setLoadingProgress(0);
       await this.engine.loadFromApiAsync(payload, (frac) => {
@@ -457,7 +498,7 @@ export class GraphPanel extends Panel {
     try {
       await this.engine.reloadGraph(layer, (frac) => {
         this.setLoadingProgress(frac);
-      });
+      }, this.currentProjectId);
       this.applyFilter();
       this.updateStats();
       this.hideLoading();
@@ -526,6 +567,7 @@ export class GraphPanel extends Panel {
       nodeId: source.id,
       targetNodeId: target.id,
       layer: this.currentLayer,
+      ...(this.currentProjectId ? { projectId: this.currentProjectId } : {}),
     }) as { path?: string[] } | null;
 
     const path = result?.path;
@@ -643,6 +685,7 @@ export class GraphPanel extends Panel {
       nodeId: node.id,
       layer: this.currentLayer,
       depth: 1,
+      ...(this.currentProjectId ? { projectId: this.currentProjectId } : {}),
     }) as { neighbors?: Array<{ id: string; type: string; label?: string; title?: string; relation?: string }> } | null;
 
     const neighbors = result?.neighbors;

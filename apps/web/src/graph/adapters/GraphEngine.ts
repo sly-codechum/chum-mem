@@ -353,10 +353,13 @@ export class GraphEngine {
    * Re-fetch graph data for the given layer and reinitialize the simulation.
    * Uses async warmup to avoid freezing the UI.
    */
-  async reloadGraph(layer = 'session', onProgress?: (frac: number) => void): Promise<void> {
+  async reloadGraph(layer = 'session', onProgress?: (frac: number) => void, projectId?: string): Promise<void> {
     this.currentLayer = layer;
-    const qs = layer ? `?layer=${encodeURIComponent(layer)}` : '';
-    const res = await fetch(`/api/graph${qs}`);
+    const params = new URLSearchParams();
+    if (layer) params.set('layer', layer);
+    if (projectId) params.set('projectId', projectId);
+    const qs = params.toString();
+    const res = await fetch(`/api/graph${qs ? `?${qs}` : ''}`);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const payload = await res.json() as GraphApiPayload;
     await this.loadFromApiAsync(payload, onProgress);

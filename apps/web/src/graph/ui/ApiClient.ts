@@ -32,9 +32,16 @@ export const ApiClient = {
     return fetchJson('/api/summary') as Promise<unknown>;
   },
 
-  getGraph(layer?: string): Promise<unknown> {
-    const qs = layer ? `?layer=${encodeURIComponent(layer)}` : '';
-    return fetchJson(`/api/graph${qs}`) as Promise<unknown>;
+  getProjects(): Promise<unknown> {
+    return fetchJson('/api/projects') as Promise<unknown>;
+  },
+
+  getGraph(layer?: string, projectId?: string): Promise<unknown> {
+    const params = new URLSearchParams();
+    if (layer) params.set('layer', layer);
+    if (projectId) params.set('projectId', projectId);
+    const qs = params.toString();
+    return fetchJson(`/api/graph${qs ? `?${qs}` : ''}`) as Promise<unknown>;
   },
 
   search(params: SearchParams): Promise<unknown> {
@@ -53,19 +60,28 @@ export const ApiClient = {
     return jsonPost('/api/knowledge/query', params) as Promise<unknown>;
   },
 
-  getCommunities(layer?: string): Promise<unknown> {
-    const qs = layer ? `?layer=${encodeURIComponent(layer)}` : '';
-    return fetchJson(`/api/knowledge/communities${qs}`) as Promise<unknown>;
+  getCommunities(layer?: string, projectId?: string): Promise<unknown> {
+    const params = new URLSearchParams();
+    if (layer) params.set('layer', layer);
+    if (projectId) params.set('projectId', projectId);
+    const qs = params.toString();
+    return fetchJson(`/api/knowledge/communities${qs ? `?${qs}` : ''}`) as Promise<unknown>;
   },
 
-  getReport(layer?: string): Promise<unknown> {
-    const qs = layer ? `?layer=${encodeURIComponent(layer)}` : '';
-    return fetchJson(`/api/knowledge/report${qs}`) as Promise<unknown>;
+  getReport(layer?: string, projectId?: string): Promise<unknown> {
+    const params = new URLSearchParams();
+    if (layer) params.set('layer', layer);
+    if (projectId) params.set('projectId', projectId);
+    const qs = params.toString();
+    return fetchJson(`/api/knowledge/report${qs ? `?${qs}` : ''}`) as Promise<unknown>;
   },
 
-  exportGraph(layer?: string): Promise<unknown> {
-    const qs = layer ? `?layer=${encodeURIComponent(layer)}` : '';
-    return fetchJson(`/api/knowledge/export${qs}`) as Promise<unknown>;
+  exportGraph(layer?: string, projectId?: string): Promise<unknown> {
+    const params = new URLSearchParams();
+    if (layer) params.set('layer', layer);
+    if (projectId) params.set('projectId', projectId);
+    const qs = params.toString();
+    return fetchJson(`/api/knowledge/export${qs ? `?${qs}` : ''}`) as Promise<unknown>;
   },
 
   buildContext(params: unknown): Promise<unknown> {
