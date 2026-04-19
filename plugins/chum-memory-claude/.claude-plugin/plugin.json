@@ -1,13 +1,13 @@
 {
   "name": "chum-memory",
   "version": "0.1.0",
-  "description": "Persistent memory plugin for Claude Code backed by chum-memory-project MCP.",
+  "description": "Persistent memory plugin for Claude Code backed by chum-mem MCP.",
   "author": {
-    "name": "CodeChum",
-    "email": "support@codechum.com"
+    "name": "Sly Bacalso",
+    "email": "sly@codechum.com"
   },
-  "homepage": "https://github.com/CodeChum/chum-memory-project",
-  "repository": "https://github.com/CodeChum/chum-memory-project",
+  "homepage": "https://github.com/sly-codechum/chum-mem",
+  "repository": "https://github.com/sly-codechum/chum-mem",
   "license": "MIT",
   "keywords": [
     "memory",
