@@ -1,14 +1,11 @@
 #!/usr/bin/env bash
 # install.sh — register chum-memory in the Codex marketplace.
 #
-# This script does three things:
-#   1. Copies the plugin directory to ~/.codex/plugins/chum-mem/
-#   2. Creates a marketplace directory with marketplace.json
-#   3. Registers the marketplace in ~/.codex/config.toml
-#
-# The user then manually installs the plugin from Codex → Plugins →
-# ChumMem. Codex handles MCP server activation, hooks, and script
-# paths from the plugin manifest at install time.
+# This script does four things:
+#   1. Copies the plugin directory to the marketplace
+#   2. Installs hooks to ~/.codex/hooks.json (Codex discovery location)
+#   3. Creates a marketplace directory with marketplace.json
+#   4. Registers the marketplace in ~/.codex/config.toml
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
@@ -20,6 +17,10 @@ CONFIG_PATH="$CODEX_HOME/config.toml"
 MARKETPLACE_DIR="$CODEX_HOME/marketplaces/codechum"
 PLUGIN_DEST="$MARKETPLACE_DIR/plugins/chum-mem"
 SOURCE_PLUGIN_DIR="$REPO_ROOT/plugins/chum-memory-codex"
+SHARED_SCRIPTS_DIR="$CODEX_HOME/chum-memory-scripts"
+HOOKS_TEMPLATE_PATH="$SOURCE_PLUGIN_DIR/codex-hooks/hooks.template.json"
+
+chum_memory_require_command "jq" "Install jq: brew install jq (macOS) or apt-get install jq (Linux)"
 
 MCP_URL="$(chum_memory_profile_url "$PROFILE")"
 
@@ -38,11 +39,49 @@ mkdir -p "$PLUGIN_DEST"
 cp -r "$SOURCE_PLUGIN_DIR/.codex-plugin" "$PLUGIN_DEST/"
 cp -r "$SOURCE_PLUGIN_DIR/skills" "$PLUGIN_DEST/"
 cp -r "$SOURCE_PLUGIN_DIR/scripts" "$PLUGIN_DEST/"
-cp -r "$SOURCE_PLUGIN_DIR/hooks" "$PLUGIN_DEST/"
 sed "s|http://localhost:63001/mcp|$MCP_URL|g" "$SOURCE_PLUGIN_DIR/.mcp.json" > "$PLUGIN_DEST/.mcp.json"
 cp "$SOURCE_PLUGIN_DIR/README.md" "$PLUGIN_DEST/"
 
+# Materialize the shared scripts directory used by Codex hooks.
+rm -rf "$SHARED_SCRIPTS_DIR"
+mkdir -p "$SHARED_SCRIPTS_DIR"
+cp -r "$SOURCE_PLUGIN_DIR/scripts/." "$SHARED_SCRIPTS_DIR/"
+
+# Generate hooks.json with a concrete scripts path so SessionStart and
+# subsequent hook events keep working after plugin installation.
+mkdir -p "$PLUGIN_DEST/hooks"
+sed "s|__SCRIPTS_DIR__|$SHARED_SCRIPTS_DIR|g" "$HOOKS_TEMPLATE_PATH" > "$PLUGIN_DEST/hooks/hooks.json"
+
 echo "✓ Installed plugin to $PLUGIN_DEST"
+echo "✓ Installed shared hook scripts to $SHARED_SCRIPTS_DIR"
+
+# ── 1b. Install hooks to ~/.codex/hooks.json (Codex discovery location) ─
+# Codex only reads hooks from ~/.codex/hooks.json and <repo>/.codex/hooks.json,
+# NOT from plugin directories. Merge our hooks into the user-level file.
+
+CODEX_HOOKS_PATH="$CODEX_HOME/hooks.json"
+GENERATED_HOOKS="$PLUGIN_DEST/hooks/hooks.json"
+
+if [[ -f "$CODEX_HOOKS_PATH" ]]; then
+  # Remove any existing chum-memory hooks (idempotent reinstall), then
+  # concatenate our hook entries alongside any other plugins' hooks.
+  jq --arg sd "$SHARED_SCRIPTS_DIR" '
+    .hooks |= with_entries(
+      .value |= map(select(.hooks | all(.command | contains($sd) | not)))
+    )
+  ' "$CODEX_HOOKS_PATH" > "$CODEX_HOOKS_PATH.tmp"
+
+  jq -s '
+    [.[].hooks | to_entries[]] | group_by(.key) |
+    map({key: .[0].key, value: [.[].value[]]}) |
+    from_entries | {hooks: .}
+  ' "$CODEX_HOOKS_PATH.tmp" "$GENERATED_HOOKS" > "$CODEX_HOOKS_PATH"
+  rm -f "$CODEX_HOOKS_PATH.tmp"
+  echo "✓ Merged hooks into $CODEX_HOOKS_PATH"
+else
+  cp "$GENERATED_HOOKS" "$CODEX_HOOKS_PATH"
+  echo "✓ Installed hooks to $CODEX_HOOKS_PATH"
+fi
 
 # ── 2. Write marketplace.json ────────────────────────────────────────────
 
