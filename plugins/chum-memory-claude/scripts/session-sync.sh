@@ -18,7 +18,11 @@ set -euo pipefail
 API_URL="${CHUM_MEMORY_API_URL:-http://localhost:63001}"
 PROJECT_ROOT="${CLAUDE_PROJECT_DIR:-${CODEX_PROJECT_DIR:-$PWD}}"
 CACHE_DIR="${PROJECT_ROOT}/.chum-cache"
-PROJECT_ID="${CHUM_MEM_PROJECT_ID:-00000000-0000-0000-0000-000000000003}"
+PROJECT_ID="${CHUM_MEM_PROJECT_ID:-}"
+if [[ -z "$PROJECT_ID" ]]; then
+  echo "session-sync: CHUM_MEM_PROJECT_ID not set, skipping session ingestion" >&2
+  exit 0
+fi
 PROVIDER="${CHUM_PROVIDER:-claude}"
 
 mkdir -p "$CACHE_DIR"

@@ -410,13 +410,15 @@ pub async fn upsert_ingested_project(
     .execute(&mut **tx)
     .await?;
 
-    // Update the existing row (if insert was skipped due to conflict)
+    // Update the existing row (if insert was skipped due to conflict).
+    // Exclude the global project (slug = 'global') to prevent stamping a
+    // repo-specific URL onto the shared fallback project.
     sqlx::query(
         r#"
         update public.projects
         set repo_url = coalesce($2, repo_url),
             default_branch = coalesce($3, default_branch)
-        where id = $1
+        where id = $1 and slug != 'global'
         "#,
     )
     .bind(project_id)

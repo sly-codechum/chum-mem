@@ -56,6 +56,31 @@ if ! curl -sf --max-time 2 "${API_URL}/health" >/dev/null 2>&1; then
   exit 0
 fi
 
+# ── Resolve project identity (.chum-mem) ──
+CHUM_MEM_FILE="${PROJECT_DIR}/.chum-mem"
+if [[ -f "$CHUM_MEM_FILE" ]]; then
+  RESOLVED_PROJECT_ID=$(jq -r '.projectId // ""' "$CHUM_MEM_FILE" 2>/dev/null || echo "")
+fi
+if [[ -z "${RESOLVED_PROJECT_ID:-}" || "$RESOLVED_PROJECT_ID" == "null" ]]; then
+  REPO_URL=$(git -C "$PROJECT_DIR" config --get remote.origin.url 2>/dev/null || echo "")
+  if [[ "$REPO_URL" =~ ^git@([^:]+):(.+)$ ]]; then
+    REPO_URL="https://${BASH_REMATCH[1]}/${BASH_REMATCH[2]}"
+  fi
+  [[ ! "$REPO_URL" =~ ^https?:// ]] && REPO_URL=""
+  PROJECT_NAME=$(basename "$PROJECT_DIR")
+  RESOLVE_PAYLOAD=$(jq -n --arg name "$PROJECT_NAME" --arg repoUrl "$REPO_URL" \
+    '{name: $name} + (if $repoUrl != "" then {repoUrl: $repoUrl} else {} end)')
+  RESOLVE_RESP=$(curl -sf --max-time 5 -X POST -H "Content-Type: application/json" \
+    -d "$RESOLVE_PAYLOAD" "${API_URL}/v1/projects/resolve" 2>/dev/null) || RESOLVE_RESP=""
+  if [[ -n "$RESOLVE_RESP" ]]; then
+    RESOLVED_PROJECT_ID=$(echo "$RESOLVE_RESP" | jq -r '.projectId // ""' 2>/dev/null || echo "")
+    if [[ -n "$RESOLVED_PROJECT_ID" && "$RESOLVED_PROJECT_ID" != "null" ]]; then
+      echo "$RESOLVE_RESP" | jq '{projectId: .projectId, name: .name}' > "$CHUM_MEM_FILE" 2>/dev/null || true
+    fi
+  fi
+fi
+export CHUM_MEM_PROJECT_ID="${RESOLVED_PROJECT_ID:-${CHUM_MEM_PROJECT_ID:-}}"
+
 # ── Session layer (always runs for every event) ──
 SESSION_STDERR=""
 if [[ -x "${SCRIPTS_DIR}/session-sync.sh" ]]; then
@@ -85,27 +110,17 @@ emit_codex() {
 }
 
 USER_PROMPT_MSG="ChumMemory graph is fresh (PCKC v2.2.3). For any code-navigation or recall step, CALL knowledge_query(search, layer:repository) AND mem_search in parallel BEFORE any Read/Grep/Glob/Edit. Before editing a file, CALL knowledge_query(neighbors, nodeId:'file:<path>', layer:repository) first. Grep/Glob is fallback only. Three-way hybrid search: lexical + pgvector + Chroma ML. Reports are graphify-style markdown. Load the ChumMemory skill for the full cookbook if unsure."
-SESSION_START_BASE="ChumMemory plugin active (PCKC v2.2.3, MCP server: chum-memory). The hook auto-runs repository_sync before every turn — do NOT call project_import or repository_sync manually. On every code-related prompt: knowledge_query(search, layer:repository) + mem_search in parallel first; Grep/Glob is the fallback only. Two layers: repository (code structure, AST) and session (interaction history). Always pass layer. Three-way hybrid search (lexical + pgvector + Chroma). Typed partitions for per-type precision. Hierarchical communities (level-0 + level-1). Governance: use claim_govern to pin/archive/reject claims. Load the ChumMemory skill for the full cookbook and decision tree."
+SESSION_START_BASE="ChumMemory plugin active (PCKC v2.2.3, MCP server: chum-memory). Multi-project mode: each project folder has its own project ID (auto-resolved via .chum-mem). Repository knowledge is per-project; mem_search falls back to global project for historical memories. The hook auto-runs repository_sync before every turn — do NOT call project_import or repository_sync manually. On every code-related prompt: knowledge_query(search, layer:repository) + mem_search in parallel first; Grep/Glob is the fallback only. Two layers: repository (code structure, AST) and session (interaction history). Always pass layer. Three-way hybrid search (lexical + pgvector + Chroma). Typed partitions for per-type precision. Hierarchical communities (level-0 + level-1). Governance: use claim_govern to pin/archive/reject claims. Load the ChumMemory skill for the full cookbook and decision tree."
 
 # ── Fetch knowledge report on session start for codebase context ──
 fetch_knowledge_report_escaped() {
   local api_url="${CHUM_MEMORY_API_URL:-http://localhost:63001}"
+  local qs="layer=repository"
+  [[ -n "${CHUM_MEM_PROJECT_ID:-}" ]] && qs="${qs}&projectId=${CHUM_MEM_PROJECT_ID}"
   local report=""
-  report=$(curl -sf --max-time 5 "${api_url}/api/knowledge/report?layer=repository" 2>/dev/null) || return 1
-  echo "$report" | python3 -c "
-import sys, json
-try:
-    data = json.load(sys.stdin)
-    r = data.get('report', '')
-    if isinstance(r, dict):
-        r = r.get('markdown', '') or r.get('report', '')
-    if len(r) > 2000:
-        r = r[:2000] + '\n... (truncated, use knowledge_report for full)'
-    r = r.replace('\\\\', '\\\\\\\\').replace('\"', '\\\\\"').replace('\n', '\\\\n').replace('\t', '\\\\t')
-    print(r, end='')
-except:
-    pass
-" 2>/dev/null || echo ""
+  report=$(curl -sf --max-time 5 "${api_url}/api/knowledge/report?${qs}" 2>/dev/null) || return 1
+  [[ -z "$report" ]] && return 1
+  printf '%s' "${report:0:2000}" | jq -Rs '.' 2>/dev/null | sed 's/^"//;s/"$//' || echo ""
 }
 
 case "$HOOK_EVENT" in

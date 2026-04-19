@@ -28,16 +28,33 @@ The runtime uses a **Proof-Carrying Knowledge Compiler** with three-way hybrid s
 
 ### v2.2.3 Architecture
 
+- **Multi-project scoping**: each project folder gets its own dynamically assigned project ID (stored in `.chum-mem`). Repository knowledge graphs and reports are strictly per-project. Memory search (`mem_search`) falls back to a "global" project when the current project has no memories yet, so historical decisions and facts remain accessible.
 - **Three-way hybrid search**: lexical (PostgreSQL FTS) + pgvector ANN + Chroma ML embeddings, merged and ranked together. Chroma is a primary source, not a fallback.
 - **Ranking weights**: semantic 30% + lexical 32% + session relevance 12% + graph proximity 10% + recency/importance/confidence 22%. Content match dominates.
 - **Typed embedding partitions**: `mem_search` with `types` routes to per-type Chroma collections (`memories_bug`, `memories_decision`, etc.) for higher precision.
 - **Hierarchical communities**: level-0 clusters + level-1 sub-communities via Leiden. Supports graphs up to 100K nodes / 200K edges.
-- **Graphify-style reports**: `knowledge_report` returns markdown with one-line extraction summary, god nodes, node/edge type distributions, and community hierarchy.
+- **Graphify-style reports**: `knowledge_report` returns markdown with one-line extraction summary, god nodes, node/edge type distributions, and community hierarchy. Reports are per-project — each project folder gets its own report from its synced code.
 - **Community cache**: 5-minute TTL, project-scoped. First query loads the session graph (~800ms), subsequent queries use cached community maps (<100ms).
 - **Soft type filter**: when `types` are requested, matching results are preferred. If no exact matches exist, unfiltered results are returned rather than empty.
 - **Deterministic governance**: claims have a `governanceState` field (active/pinned/archived/rejected). Pinned claims get a +0.20 ranking boost; archived (-0.50) and rejected (-0.80) are excluded from default search. Use `claim_govern` to transition states with an optional reason for audit.
 - **Continuation retrieval**: queries like "continue prior work" automatically boost unsuperseded actionable claims (task, decision, open_question) and penalize superseded ones. The ranker detects 17 continuation signal phrases.
 - **Session-start knowledge report**: the hook fetches `knowledge_report(layer:repository)` on `SessionStart` and injects a truncated codebase overview into the session context, so you start every conversation knowing the project shape.
+
+### Project scoping
+
+The system operates in **multi-project mode**. Each project folder is automatically registered on first use:
+
+1. The hook reads `.chum-mem` in the project root for the cached project ID
+2. If missing, it calls `POST /v1/projects/resolve` with the folder name and git remote URL
+3. The API finds an existing project by repo URL or name, or creates a new one with a fresh UUID
+4. The resolved project ID is cached in `.chum-mem` and exported as `CHUM_MEM_PROJECT_ID`
+
+**Scoping rules:**
+- **Repository layer** (`knowledge_query`, `knowledge_report`, `knowledge_communities`): strictly per-project. Each project folder has its own knowledge graph built from its synced code. No cross-project fallback.
+- **Session layer** (`mem_search`): per-project with **global fallback**. If a project-specific memory search returns no results, the system automatically retries against the "global" project (which holds all historical memories from before per-project scoping). This ensures past decisions and facts are always accessible.
+- **Sessions**: scoped to the project folder where they occur. The hook exports the project ID so `session_start` associates the session with the correct project.
+
+You never need to manage project IDs manually — the hook handles everything.
 
 Practical consequences for a turn:
 
@@ -266,5 +283,7 @@ Note: first query after API restart or 5-minute cache expiry takes ~800ms (sessi
 
 - The server resolves tenant / org / team scope from the auth token. Never pass these.
 - `repository` and `session` layers are isolated — no cross-contamination at query time.
+- Project IDs are resolved automatically by the hook — never hardcode or guess project UUIDs.
+- Multi-project mode: the server runs without a fixed project scope. Each request carries its project ID; the API validates it belongs to the same org/team.
 - Token-scoped machine auth is enforced server-side; client cannot escalate.
 - The belief gate is enforced server-side on `session_end` derivation; do not try to inject durable beliefs through `session_event_append` payloads.
