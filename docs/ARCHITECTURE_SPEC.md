@@ -2,16 +2,25 @@
 
 ## 1. Objective
 
-`chum-mem` is a multi-tenant memory platform for coding agents. It accepts session activity from Claude, Codex, and Gemini clients, derives reusable memory from that activity, stores memory in self-hosted PostgreSQL, and returns context packs for future work through MCP tools.
+`chum-mem` is a multi-tenant persistent memory system for coding agents. It ingests normalized provider events from Claude, Codex, and Gemini clients, derives typed durable claims with proof, stores them in PostgreSQL-backed tenant-safe data structures, and serves compact evidence through MCP tools and API endpoints.
+
+The current target architecture is v2.2.2 PCKC:
+
+- claims are the unit of memory
+- proof is the unit of trust
+- compiled minimal proof sets are the unit of context
+- repository and session graphs are first-class retrieval surfaces
+- retrieval is hybrid across lexical, vector, and graph signals
 
 The system must optimize for:
 
 - tenant safety
 - predictable retrieval quality
 - low operational complexity
+- benchmark-driven evolution
 - Docker-native deployment
-- parallel agent workflows in Codex
-- resistance to context rot across long-running and multi-session work
+- parallel agent workflows
+- resistance to context rot across long-running multi-session work
 
 ## 2. System context
 
@@ -27,199 +36,180 @@ The system must optimize for:
 
 - PostgreSQL
 - pgvector
-- object storage for large artifacts
-- optional Redis for queues and caching
-- embedding and summarization models
+- Chroma
+- optional object storage for large artifacts
+- optional Redis or equivalent queue/cache infrastructure
 
-## 3. High-level architecture
+## 3. Current runtime implementation
+
+The repo’s primary runtime is Rust:
+
+- `rust/apps/api`: MCP and HTTP server
+- `rust/apps/worker`: background jobs and graph persistence
+- `rust/crates/chum_mem_pipeline`: derivation, retrieval, graph, and compilation logic
+- `rust/crates/chum_mem_db`: SQL-backed data access and reconciliation
+- `rust/crates/chum_mem_contracts`: shared contracts and enums
+
+Supporting surfaces:
+
+- `apps/web`: dashboard and graph inspection UI
+- `plugins/` and `extensions/`: provider/plugin packaging and host integration
+- `infra/migrations`: explicit database schema history
+
+PostgreSQL remains the durable source of truth. Chroma is used for typed embedding collections in the semantic retrieval path. pgvector remains part of the hybrid retrieval model and durability/experimentation story.
+
+## 4. High-level architecture
 
 ```text
-Claude/Codex/Gemini clients
+Claude / Codex / Gemini clients
         |
         v
-Provider Adapter Layer
+Provider adapters / plugin hooks
         |
         v
-MCP Server / App Server
+MCP + HTTP API server
         |
-        +--> Token AuthN/AuthZ
-        +--> Ingestion Service
-        +--> Query Understanding
-        +--> Candidate Retrieval
-        +--> Reranker
-        +--> Context Builder
-        +--> Token Service
-        +--> Team/Project Service
+        +--> token auth / tenant scoping
+        +--> ingestion service
+        +--> hybrid retrieval service
+        +--> context builder / proof compiler
+        +--> knowledge graph query/report service
         |
         v
-PostgreSQL + pgvector
+PostgreSQL + pgvector + Chroma
         |
-        +--> raw session tables
-        +--> episodic memory tables
-        +--> semantic memory tables
-        +--> normalized memory tables
-        +--> retrieval feature tables
-        +--> session and memory graph tables
-        +--> team/project/user tables
-        +--> audit tables
+        +--> team/project/auth tables
+        +--> sessions / session_events / session_episodes
+        +--> memories
+        +--> claims / claim_proofs / claim_edges
+        +--> embeddings and retrieval metadata
+        +--> knowledge_snapshots / communities / artifacts
         |
         v
-Background Workers
-        +--> event normalization
-        +--> episode compaction
-        +--> memory extraction
-        +--> embeddings
-        +--> graph linking
-        +--> supersession / invalidation
-        +--> reindexing
+Worker runtime
+        +--> derivation
+        +--> claim extraction
+        +--> proof attachment
+        +--> contradiction / supersession updates
+        +--> repository sync graph build
+        +--> session graph build / merge
+        +--> community detection
 ```
 
-## 4. Logical components
+## 5. Core concepts
 
-### 4.1 MCP server
+### 5.1 Memory units
 
-Responsibilities:
+The durable unit is a typed claim linked to a memory record.
 
-- expose MCP tools over Streamable HTTP and stdio
-- validate inputs with shared contracts
-- authenticate API tokens
-- resolve tenant and project scope on the server
-- call ingestion, retrieval, and context services
-- expose health and diagnostics endpoints for operations
+Supported memory types:
 
-Recommended stack:
+- `fact`
+- `decision`
+- `task`
+- `constraint`
+- `bug`
+- `fix`
+- `open_question`
+- `summary`
+- `implementation_detail`
+- `change_log`
+- `risk`
 
-- TypeScript
-- MCP TypeScript SDK
-- Express or Fastify
-- OpenTelemetry for tracing
+### 5.2 Trust units
 
-Compatibility note:
+Each durable claim carries:
 
-- Prefer `stdio` transport for maximum client compatibility across Codex, Claude, and Gemini.
-- Keep Streamable HTTP enabled at `http://127.0.0.1:65301/mcp` for clients that support it.
+- `authority_class`
+- `verification_status`
+- `proof_handles`
+- temporal validity
+- supersession state
 
-### 4.2 Optional admin surfaces
+Canonical authority classes:
 
-Responsibilities:
+- `repository`
+- `user_confirmed`
+- `tool_verified`
+- `test_verified`
+- `session_derived`
+- `model_derived`
 
-- future browser admin and audit UI
-- operator workflows for teams, users, projects, and tokens
+Canonical verification statuses:
 
-Recommended stack:
+- `verified`
+- `user_confirmed`
+- `inferred`
+- `contradicted`
+- `unverified`
 
-- TypeScript
-- Next.js or a thin admin console
+### 5.3 Context units
 
-### 4.3 Background workers
+There are two context assembly paths:
 
-Responsibilities:
+- `context_build`: compact context packing
+- `context_compile_v2`: proof-disciplined minimal cover with hard token ceilings and `proof_gap` signaling
 
-- normalize provider events into stable spans
-- compact sessions into episode summaries
-- extract structured memories with provenance
-- create embeddings in PostgreSQL-backed indexes
-- compute memory relationships and session relationships
-- mark stale or superseded memories
-- repair and replay failed jobs
+## 6. Multi-tenant model
 
-Recommended execution model:
+### 6.1 Entities
 
-- queue-backed job runners
-- idempotent jobs keyed by session event or memory ID
-- retry with poison queue and manual replay tools
-- no polling-based semantic sync loop on the primary retrieval path
+- `organizations`
+- `teams`
+- `team_members`
+- `projects`
+- `api_tokens`
+- `sessions`
+- `session_events`
+- `session_episodes`
+- `memories`
+- `claims`
+- `claim_proofs`
+- `claim_edges`
+- `knowledge_snapshots`
+- `knowledge_communities`
+- `knowledge_snapshot_heads`
+- `knowledge_snapshot_artifacts`
+- `audit_logs`
 
-### 4.4 Storage layer
+### 6.2 Isolation model
 
-Primary store:
+All tenant-owned rows must include:
 
-- self-hosted PostgreSQL
+- `organization_id`
+- `team_id`
 
-Capabilities:
+Project-owned rows must also include:
 
-- row-level security
-- JSONB metadata storage
-- full-text search
-- pgvector for semantic retrieval
-- transactional integrity for ingestion
-
-Optional secondary store:
-
-- object storage for attachments, large transcripts, and generated artifacts
-
-### 4.5 Context engineering model
-
-`chum-mem` should behave like a memory operating system, not a raw transcript store.
-
-The architecture must separate:
-
-- hot context: the task-local context pack sent to the active model
-- warm episodic memory: recent session- and branch-linked episodes
-- cold semantic memory: durable facts, decisions, bugs, tasks, and implementation notes
-- provenance graph: the event-level evidence that explains why any item was retrieved
-
-This separation is the primary defense against context rot. Instead of stuffing more text into prompts, the system should continuously compress, rank, invalidate, and re-expand only the evidence needed for the current objective.
-
-## 5. Multi-tenant model
-
-### 5.1 Entities
-
-- `app_user`
-- `organization`
-- `team`
-- `team_member`
-- `project`
-- `api_token`
-- `provider_connection`
-- `session`
-- `session_event`
-- `memory`
-- `embedding`
-- `memory_edge`
-- `context_request`
-- `audit_log`
-
-### 5.2 Isolation model
-
-All tenant-owned records must include `organization_id` and `team_id`. Project-owned records must also include `project_id`.
+- `project_id`
 
 Isolation rules:
 
-- interactive users access data through authenticated membership
-- machine tokens resolve team and user from the token record, never from caller-supplied identifiers
-- team admins can manage tokens and projects for their team
+- all tenant access resolves server-side from user or token identity
+- clients do not control tenant scope directly
 - project-scoped tokens cannot access out-of-scope projects
+- durable memory and graph data inherit the tenant/project scope of their originating work
 
-### 5.3 RLS strategy
+### 6.3 RLS strategy
 
-Use PostgreSQL RLS on all tenant tables. Policies should check application session settings set by the server on each transaction:
+Use PostgreSQL RLS on all tenant tables. Policies must check server-set transaction-scoped application settings or equivalent trusted helpers.
 
-- current `organization_id` and `team_id` match the row
-- optional project scoping is satisfied
-- write access is limited to the resolved server actor and token scope
-- revoked or expired tokens are rejected before the transaction begins
+Requirements:
 
-## 6. Provider adapter architecture
+- reject revoked or expired tokens before trusted queries begin
+- use database-enforced scope checks, not app-only filtering
+- apply the same tenant discipline to claims, proofs, graph snapshots, and community rows
 
-Create one shared interface for all providers:
+## 7. Provider adapter architecture
 
-```ts
-interface ProviderAdapter {
-  provider: 'claude' | 'codex' | 'gemini';
-  startSession(input: StartSessionInput): Promise<StartSessionResult>;
-  appendEvent(input: SessionEventInput): Promise<void>;
-  endSession(input: EndSessionInput): Promise<EndSessionResult>;
-  searchMemory(input: SearchInput): Promise<SearchResult>;
-  buildContextPack(input: ContextRequestInput): Promise<ContextPack>;
-}
-```
+All providers must normalize into the same ingestion and retrieval contract.
 
-Normalization rules:
+Normalization goals:
 
-- convert provider-native events into a canonical schema
-- preserve original payload in `raw_payload`
-- attach provider-specific metadata without polluting the canonical contract
+- preserve the raw provider payload
+- emit stable canonical event types
+- preserve repo, branch, file, and session context
+- avoid polluting the canonical schema with provider-only semantics
 
 Canonical event types:
 
@@ -233,359 +223,323 @@ Canonical event types:
 - `summary`
 - `error`
 - `annotation`
+- `reasoning`
+- `turn_context`
+- `agent_message`
 
-## 7. Ingestion pipeline
+## 8. Ingestion pipeline
 
-### 7.1 Start session
+### 8.1 Session start
 
-Client sends:
+Inputs:
 
 - provider
 - project identifier
 - external session identifier
 - repo metadata
-- branch metadata
-- user agent and local metadata
+- local/client metadata
 
 Server actions:
 
 - authenticate caller
-- resolve team, project, and actor
-- create or upsert session
-- emit audit log
+- resolve tenant/project scope
+- create or resume session
+- emit audit information
 
-### 7.2 Append event
-
-Client sends normalized or provider-native events.
+### 8.2 Event append
 
 Server actions:
 
 - validate payload
-- deduplicate on event idempotency key
+- deduplicate on `idempotency_key`
 - persist raw event
-- extract stable retrieval metadata immediately when cheap:
-  - file paths
-  - symbols
-  - command/tool names
-  - branch / commit / repo context
-  - error signatures
-- enqueue derivation jobs only after event classification
+- extract cheap retrieval metadata immediately
+- preserve turn boundaries and file-change information
 
-### 7.3 End session
+### 8.3 Session end
 
 Server actions:
 
 - mark session complete
-- derive an episode summary and outcome summary
-- trigger final compaction pipeline
-- emit audit log
+- derive episodes and typed memories
+- attach proofs
+- update contradiction / supersession state
+- enqueue or run session graph build
+- emit audit information
 
-### 7.4 Two-stage derivation
+## 9. Memory derivation model
 
-The default derivation path should be:
+### 9.1 Event to episode
 
-1. event to episode
-   - segment the session into coherent work episodes such as debugging, implementation, refactor, or investigation
-   - preserve the ordered event span and the source `session_id`
-2. episode to memory
-   - extract atomic memories from each episode
-   - assign a type, title, summary, confidence, importance, freshness window, and provenance handles
-   - link memory to both `session_id` and `episode_id`
+Segment sessions into coherent work episodes such as:
 
-This avoids the current failure mode where a single end-of-session summary or failure blob becomes the dominant retrieval artifact.
+- debugging
+- implementation
+- refactor
+- planning
+- investigation
 
-## 8. Memory derivation model
+Each episode preserves:
 
-### 8.1 Raw to memory transformation
+- ordered event span
+- `session_id`
+- episode type
+- timestamps
+- compact summary metadata
 
-Transform session events into reusable units:
+### 9.2 Episode to memory and claims
 
-- fact
-- decision
-- task
-- bug
-- summary
-- implementation detail
-- change log
-- risk
+Derivation produces reusable units:
 
-Each memory record should include:
+- memory record
+- claim record
+- claim proofs
+- claim edges where applicable
 
-- concise title
-- normalized content
-- short summary
-- provenance links to session events
-- primary source `session_id`
-- source `episode_id`
-- importance score
-- confidence score
-- freshness state
-- supersession state
-- searchable metadata
+Each derived claim should preserve:
 
-### 8.2 Memory layers
+- `claim_key`
+- `claim_type`
+- subject / predicate / object
+- polarity
+- authority class
+- verification status
+- admission state
+- validity window
+- supersession link
 
-Use three explicit layers:
+### 9.3 Belief gate
 
-- `episode_memory`
-  - session-local findings, command traces, error clusters, local implementation steps
-- `semantic_memory`
-  - durable facts, decisions, tasks, bugs, risks, implementation details
-- `reflection_memory`
-  - higher-order summaries over multiple related sessions or episodes
+The belief gate is mandatory.
 
-The retrieval system should search all three layers but rank them differently depending on the query intent.
+Rules:
 
-### 8.3 Linking
+- reasoning traces and `turn_context` are stored as events but must not originate durable claims
+- model-derived unverified prose is not current truth by default
+- defense-in-depth filtering must also exist during compilation and ranking
 
-Use `memory_edges` to encode relations:
+### 9.4 Contradiction and supersession
 
-- duplicates
-- supersedes
-- caused_by
-- depends_on
-- related_to
-- from_same_session
-- from_same_episode
-- contradicts
-- confirms
+The system must preserve:
 
-### 8.4 Context-rot controls
+- current-valid claims
+- historical superseded claims
+- explicit contradictory claims
 
-To prevent stale or low-value memories from dominating retrieval, every memory must support:
+Ranking and compilation must prefer:
 
-- temporal decay that is type-aware
-  - decisions decay slowly
-  - active task state decays quickly
-  - command transcripts decay fastest
-- write-triggered invalidation
-  - a new decision, file change, or successful fix can supersede older memories
-- contradiction handling
-  - contradictory memories stay queryable but cannot both receive top rank without explicit uncertainty markers
-- summary refresh
-  - long-running projects periodically regenerate reflection memories from current child memories
-- provenance-first debugging
-  - every ranked item must explain which session events justified the rank
+- admitted, unsuperseded, current-valid claims
+- higher-authority proof-backed corrections over older weak hypotheses
 
-## 9. Search and retrieval
+## 10. Knowledge graph architecture
 
-### 9.1 Search modes
+### 10.1 Layer separation
 
-- lexical search via full-text indexes
-- semantic search via pgvector
-- graph and session-neighborhood retrieval
-- hybrid reranked search
-- metadata filtering
+There are two graph layers:
 
-Primary recommendation:
+- `repository`
+- `session`
 
-- keep PostgreSQL plus pgvector as the source of truth for primary semantic retrieval
-- do not depend on an eventually consistent Chroma mirror for core ranking
-- if Chroma remains, treat it as an optional accelerator or experiment, not the canonical search path
+These layers are stored separately through `snapshot_type` and queried independently unless a unified report is requested.
 
-### 9.2 Filters
+### 10.2 Repository layer
 
-- organization
-- team
-- project
-- user
-- provider
-- repo
-- branch
-- session IDs
-- memory type
-- time range
-- tags
+The repository layer is AST-derived and should include:
 
-### 9.3 Candidate generation
+- files
+- symbols
+- imports
+- containment edges
+- cross-file calls
+- documentation structure
+- rationale/comment nodes where supported
 
-Generate candidates from four channels in parallel:
+v2.2.2 repository expectations:
 
-1. lexical
-   - `tsvector` over title, summary, content, symbols, errors, and file paths
-2. semantic
-   - embedding search over summaries and normalized content in `public.embeddings`
-3. session graph
-   - exact `session_id` matches, adjacent sessions in the same branch, and sessions linked by shared files or repeated error signatures
-4. memory graph
-   - `memory_edges` expansion with small bounded hops
+- containment edges are first-class
+- cross-file call resolution is applied in the sync path
+- repository reasoning should reduce fallback to grep
 
-No single channel should dominate candidate generation. This is required to avoid the standard top-k chunk failure mode.
+### 10.3 Session layer
 
-### 9.4 Ranking model
+The session layer is event- and claim-derived and should include:
 
-Ranking should be feature-based and session-aware. Each candidate should expose:
+- sessions
+- episodes
+- claims/memories
+- file changes
+- commands
+- tools
+- tests
+- errors
+
+The session layer should preserve inter-claim connectivity rather than leaving claims as isolated leaves.
+
+### 10.4 Communities
+
+Community detection uses hierarchical Leiden clustering.
+
+Persist:
+
+- `community_id`
+- `level`
+- `community_path`
+- cohesion score
+- representative nodes
+- bridge nodes
+
+The system must support:
+
+- level-0 communities
+- level-1 sub-communities
+- project-scoped community caching
+
+### 10.5 Reports and queries
+
+The graph service must support:
+
+- search
+- hub nodes
+- neighbors
+- shortest path
+- communities
+- goal-directed graph retrieval
+- human-readable reports
+
+The runtime supports repository, session, and unified reporting. Public tool schemas should remain aligned with that behavior.
+
+## 11. Search and retrieval
+
+### 11.1 Search modes
+
+- lexical
+- semantic
+- hybrid
+
+Retrieval intents:
+
+- `none`
+- `memory_only`
+- `repository_only`
+- `session_graph_only`
+- `hybrid`
+
+### 11.2 Candidate generation
+
+Generate candidates from multiple channels:
+
+1. PostgreSQL lexical search
+2. vector/embedding search
+3. Chroma typed collections
+4. session graph proximity
+5. repository graph proximity
+
+No single channel should dominate by default.
+
+### 11.3 Typed retrieval
+
+Typed retrieval is a v2.2.2 requirement.
+
+Requirements:
+
+- route `types`-constrained searches to per-type semantic partitions
+- preserve soft type filtering when exact matches are sparse
+- prevent continuation and bug/fix queries from being overwhelmed by unrelated claim types
+
+### 11.4 Ranking model
+
+Ranking must be feature-based and proof-aware.
+
+Important inputs include:
 
 - lexical score
 - semantic score
-- session relevance score
-- graph proximity score
-- branch / repo / file overlap score
-- recency score
-- importance score
-- confidence score
+- session relevance
+- graph proximity
+- community relevance
+- recency
+- importance
+- confidence
 - freshness penalty
 - superseded penalty
+- claim-type fit
 
-Recommended ranking formula for the first implementation:
+Operational guidance:
 
-```text
-final_score =
-  0.22 * lexical +
-  0.22 * semantic +
-  0.18 * session_relevance +
-  0.12 * graph_proximity +
-  0.08 * repo_branch_file_overlap +
-  0.08 * recency +
-  0.06 * importance +
-  0.04 * confidence -
-  0.10 * freshness_penalty -
-  0.10 * superseded_penalty
-```
+- content match should dominate
+- stale graph centrality should not dominate ranking
+- contradictions must be surfaced, not averaged away
 
-This formula is intentionally session-aware. `session_relevance` is not optional metadata; it is a first-class retrieval signal.
+### 11.5 Retrieval workflow
 
-### 9.5 Retrieval tiers
+Default retrieval workflow:
 
-#### Tier 1: index results
-Return compact ranked hits:
+1. `knowledge_query(search, layer:"repository")` and `mem_search` in parallel when the task touches code
+2. `mem_search` compact first
+3. `memory_get_batch` only for selected IDs
+4. `context_build` or `context_compile_v2` only when necessary
 
-- id
-- title
-- type
-- score
-- matched `session_id`
-- timestamp
-- summary snippet
+## 12. Context assembly
 
-#### Tier 2: context neighborhood
-Return nearby or related memory:
-
-- same session
-- same episode
-- related edges
-
-#### Tier 3: full details
-Return full memory detail only for selected IDs:
-
-- complete memory content
-- provenance details
-- related memory IDs
-
-### 9.6 Mandatory retrieval workflow
-
-To prevent context bloat and latency regressions, all clients should follow:
-
-1. `mem_search` first, with compact output (`disclosureLevel=overview`, small `limit`).
-2. `memory_get_batch` only for filtered IDs.
-3. `context_build` only after filtering.
-
-This is the default contract for Codex, Claude, and Gemini integrations.
-
-### 9.7 Concise prompt contract
-
-Recommended startup prompt for any client:
-
-```text
-Memory-first for this task.
-Run mem_search (hybrid, overview, limit 5) for: "<task>".
-Pick relevant IDs, run memory_get_batch only for those IDs, then solve "<task>".
-If no relevant memory, say so briefly and continue.
-```
-
-## 10. Context pack builder
+### 12.1 `context_build`
 
 Purpose:
 
-Build a token-efficient context payload for a future provider session or MCP-assisted task.
+- assemble compact context packs for active model work
 
-Inputs:
+Typical sections:
 
-- team
-- project
-- provider
-- objective or task description
-- optional repo, branch, or file paths
-- max token budget
+- current truth
+- project facts
+- recent decisions
+- active tasks
+- constraints
+- known bugs
+- verified fixes
+- open questions
+- implementation notes
+- repository knowledge
+- session continuity
+- conflicts
+- proof handles
 
-Algorithm:
+### 12.2 `context_compile_v2`
 
-1. parse objective into retrieval intents
-2. classify the query:
-   - factual lookup
-   - continuation of prior session
-   - debugging
-   - implementation
-   - planning
-3. run session-aware hybrid retrieval
-4. deduplicate by provenance and supersession, not only by memory id
-5. enforce coverage:
-   - at least one high-confidence item
-   - at least one recent item when applicable
-   - at least one same-session or same-branch item when continuing prior work
-6. compress selected evidence into compact sections:
-   - project facts
-   - recent decisions
-   - active bugs/tasks
-   - relevant implementation details
-   - citations/provenance handles
-7. include why-selected metadata for debugging and offline evaluation
+Purpose:
 
-Packing rules:
+- compile the smallest admissible proof set that covers the objective’s sub-goals under a hard token budget
 
-- never include raw transcript blobs when an episode or semantic memory exists
-- prefer semantically distinct evidence over near-duplicate top-k hits
-- prefer unsuperseded memories unless the query explicitly asks for history
-- reserve part of the token budget for high-value provenance excerpts, not only summaries
-- emit the top matched `session_id` values so clients can continue the right thread
+Requirements:
 
-Output contract:
+- filter out inadmissible claims
+- prefer current-valid claims
+- refuse silent truncation
+- emit `proof_gap` markers when coverage exceeds budget
 
-```json
-{
-  "context_pack": {
-    "project_facts": [],
-    "recent_decisions": [],
-    "active_tasks": [],
-    "known_bugs": [],
-    "implementation_notes": [],
-    "sources": []
-  }
-}
-```
+### 12.3 Context-rot controls
 
-## 11. Authentication and authorization
+The system should fight context rot by design:
 
-### 11.1 Initial auth model
+- prefer atomic truth over long narration
+- preserve contradiction markers
+- decay or de-prioritize low-value transcript-like material
+- favor repository evidence for repository questions
+- favor current-valid decisions/tasks for continuation questions
 
-Use:
+## 13. Authentication and authorization
 
-- server-managed `app_users`
-- API tokens for machine access
-- optional bootstrap admin user created out of band
+### 13.1 Machine auth
 
-Future phases may add OAuth or an admin UI, but the initial deployment target is machine-to-server MCP access.
+API tokens must:
 
-### 11.2 Machine auth
+- be generated server-side
+- be high entropy
+- be hashed before persistence
+- be shown once only
+- record `last_used_at`
+- support expiration and revocation
 
-API token format:
-
-- prefix: `cmem_live_`
-- random secret generated server-side
-- store only `token_hash`
-- show plaintext once
-
-Token attributes:
-
-- team scope
-- optional project scope
-- scopes array
-- creator user ID
-- last used timestamp
-- expiration
-- revocation timestamp
-
-### 11.3 Scope model
+### 13.2 Scope model
 
 Example scopes:
 
@@ -595,304 +549,206 @@ Example scopes:
 - `project:write`
 - `team:admin`
 
-## 12. Database schema outline
+### 13.3 Trusted code paths
 
-### `organizations`
-- `id`
-- `name`
-- `slug`
-- `created_at`
+All trusted code paths must:
 
-### `teams`
-- `id`
-- `organization_id`
-- `name`
-- `slug`
-- `created_at`
+- resolve scope server-side
+- apply transaction-scoped tenant settings
+- write auditable records for sensitive operations
 
-### `team_members`
-- `id`
-- `organization_id`
-- `team_id`
-- `user_id`
-- `role`
-- `status`
-- `created_at`
+## 14. Database schema outline
 
-### `projects`
-- `id`
-- `organization_id`
-- `team_id`
-- `name`
-- `slug`
-- `repo_url`
-- `default_branch`
-- `created_at`
+### 14.1 Identity and tenancy tables
 
-### `api_tokens`
-- `id`
-- `organization_id`
-- `team_id`
-- `project_id nullable`
-- `user_id`
-- `name`
-- `token_prefix`
-- `token_hash`
-- `scopes jsonb`
-- `last_used_at nullable`
-- `expires_at nullable`
-- `revoked_at nullable`
-- `created_at`
+- `organizations`
+- `teams`
+- `team_members`
+- `projects`
+- `api_tokens`
 
-### `sessions`
-- `id`
-- `organization_id`
-- `team_id`
-- `project_id`
-- `user_id nullable`
-- `provider`
-- `external_session_id`
-- `repo_url nullable`
-- `branch nullable`
-- `status`
-- `started_at`
-- `ended_at nullable`
+### 14.2 Session and memory tables
 
-### `session_events`
-- `id`
-- `organization_id`
-- `team_id`
-- `project_id`
-- `session_id`
-- `provider`
-- `event_type`
-- `event_time`
-- `idempotency_key`
-- `payload jsonb`
-- `raw_payload jsonb`
-- `created_at`
+- `sessions`
+- `session_events`
+- `session_episodes`
+- `memories`
 
-### `session_episodes`
-- `id`
-- `organization_id`
-- `team_id`
-- `project_id`
-- `session_id`
-- `episode_type`
-- `title`
-- `summary`
-- `started_at`
-- `ended_at`
-- `metadata jsonb`
-- `created_at`
+### 14.3 Claim tables
 
-### `memories`
-- `id`
-- `organization_id`
-- `team_id`
-- `project_id`
-- `session_id nullable`
-- `episode_id nullable`
-- `type`
-- `title`
-- `content`
-- `summary`
-- `importance_score`
-- `confidence_score`
-- `freshness_score`
-- `metadata jsonb`
-- `created_by`
-- `created_at`
-- `superseded_at nullable`
+- `claims`
+- `claim_proofs`
+- `claim_edges`
 
-### `embeddings`
-- `id`
-- `organization_id`
-- `team_id`
-- `project_id`
-- `memory_id`
-- `model`
-- `embedding vector(...)`
-- `created_at`
+Claim storage requirements:
 
-### `memory_edges`
-- `id`
-- `organization_id`
-- `team_id`
-- `project_id`
-- `from_memory_id`
-- `to_memory_id`
-- `edge_type`
-- `weight`
-- `created_at`
+- one claim row per memory/claim unit
+- authority and verification metadata on the claim
+- proof rows with source references and excerpts
+- claim edges for supersedes / contradicts / confirms / depends_on / derived_from style relations
 
-### `session_edges`
-- `id`
-- `organization_id`
-- `team_id`
-- `project_id`
-- `from_session_id`
-- `to_session_id`
-- `edge_type`
-- `weight`
-- `created_at`
+### 14.4 Graph tables
 
-### `retrieval_features`
-- `id`
-- `organization_id`
-- `team_id`
-- `project_id`
-- `memory_id`
-- `feature_name`
-- `feature_value`
-- `feature_group`
-- `updated_at`
+- `knowledge_snapshots`
+- `knowledge_snapshot_heads`
+- `knowledge_snapshot_artifacts`
+- `knowledge_communities`
 
-### `context_requests`
-- `id`
-- `organization_id`
-- `team_id`
-- `project_id`
-- `requester_user_id nullable`
-- `requester_token_id nullable`
-- `provider`
-- `objective`
-- `token_budget`
-- `response_summary`
-- `created_at`
+### 14.5 Supporting tables
 
-### `audit_logs`
-- `id`
-- `organization_id nullable`
-- `team_id nullable`
-- `project_id nullable`
-- `actor_type`
-- `actor_id`
-- `action`
-- `target_type`
-- `target_id`
-- `metadata jsonb`
-- `created_at`
+- embeddings and retrieval metadata tables
+- audit log tables
 
-## 13. API design
+## 15. MCP and HTTP surface
 
-### Ingestion
+### 15.1 MCP tools
 
-- `POST /v1/ingest/session/start`
-- `POST /v1/ingest/session/event`
-- `POST /v1/ingest/session/end`
-
-### Retrieval
-
-- `POST /v1/memory/search`
-- `GET /v1/memory/:id`
-- `POST /v1/context/build`
-
-### MCP tool surface
+Required MCP tools:
 
 - `session_start`
 - `session_event_append`
 - `session_end`
-- `memory_search`
+- `repository_sync`
+- `health_check`
+- `mem_search`
 - `memory_get`
+- `memory_get_batch`
 - `context_build`
-- `projects_list`
-- `token_create`
-- `token_revoke`
-- `teams_me`
-- `audit_list`
+- `context_compile_v2`
+- `graph_snapshot`
+- `knowledge_graph_export`
+- `knowledge_report`
+- `knowledge_query`
+- `knowledge_communities`
 
-### Operational HTTP endpoints
+### 15.2 HTTP endpoints
 
-- `POST /mcp`
-- `GET /mcp`
-- `DELETE /mcp`
-- `GET /health`
+Required server surfaces include:
 
-## 14. Research basis
+- MCP endpoint(s)
+- health/readiness
+- graph/report inspection where appropriate
 
-The retrieval and context-engineering changes in this spec are supported by the paper notes in [CONTEXT_ENGINEERING_RESEARCH.md](./docs/CONTEXT_ENGINEERING_RESEARCH.md).
+The exact transport can evolve, but the normalized capability surface must remain stable for provider clients.
 
-## 15. Reliability and idempotency
+## 16. Reliability and performance
 
-- require idempotency key on session event ingestion
-- use exactly-once semantics where feasible, otherwise at-least-once with deduplication
-- wrap session close and summary creation with transactional guards
-- worker jobs must be restart-safe
+### 16.1 Reliability
 
-## 16. Observability
+- require idempotency keys on append paths
+- keep worker jobs restart-safe
+- preserve exactly-once semantics where feasible and deduplicate otherwise
+- avoid mixing stale artifact reports with current graph output
+
+### 16.2 Performance
+
+Graph-heavy queries must avoid repeatedly loading large snapshots on hot paths.
+
+Expected measures:
+
+- project-scoped graph/community caching
+- bounded candidate generation
+- typed semantic partitions
+- batch upserts and bounded sync jobs
+
+### 16.3 Benchmark discipline
+
+Changes to retrieval, derivation, compilation, or graph logic should be validated against the benchmark harness in `scripts/benchmark/live-http.ts`.
+
+The architecture should preserve or improve:
+
+- retrieval noise suppression
+- claim-type fit
+- continuation quality
+- context fill quality
+- proof-gap correctness
+- graph latency
+
+## 17. Observability
 
 Implement:
 
-- structured application logs
-- request IDs and correlation IDs
-- distributed tracing
-- metrics for ingestion volume, queue depth, retrieval latency, context pack build time, token validation failures
-- audit records for sensitive operations
+- structured logs
+- request and correlation IDs
+- tracing across ingestion, retrieval, and worker flows
+- metrics for ingestion, retrieval latency, graph latency, compilation latency, token failures, and queue depth
+- audit records for token use, memory access, and sensitive governance operations
 
-## 17. Security requirements
+## 18. Security requirements
 
-- hash API tokens with a slow password hash or keyed hash strategy
-- rotate signing and secret material through managed secrets
-- validate webhook/provider payloads where applicable
+- hash API tokens with a strong keyed or slow-hash strategy
+- protect secrets via managed secret storage
+- minimize sensitive prompt retention where possible
 - encrypt sensitive configuration at rest
-- minimize raw sensitive prompt retention where possible
-- define retention policy per team or plan
+- preserve tenant isolation on all graph and claim tables
+- treat proof and provenance as potentially sensitive tenant data
 
-## 18. Deployment model
+## 19. Deployment model
 
-### Recommended environments
+Recommended environments:
 
 - local development
 - preview/staging
 - production
 
-### Deployment units
+Deployment units:
 
-- web app
-- MCP server
+- API server
 - worker service
-- Redis optional
 - PostgreSQL
+- Chroma
+- optional queue/cache service
+- optional web dashboard
 
-### Cloud-first guidance
+Compute should remain stateless. Durable state must live in managed stores.
 
-Keep compute stateless. Persist durable state only in managed stores. All background work should be resumable in a new runtime.
-
-## 19. Build order
+## 20. Build order
 
 ### Track A: platform
-- project bootstrap
-- server-managed users
-- teams and projects
-- RLS and migration pipeline
+
+- tenancy and auth
 - token service
-- Docker packaging
+- migration and RLS foundation
+- audit plumbing
 
 ### Track B: ingestion
+
 - session contracts
-- ingestion endpoints
-- raw persistence
-- derivation jobs
+- event ingestion
+- deduplication
+- episode segmentation
 
-### Track C: retrieval
-- full-text indexes
-- embeddings pipeline
-- hybrid search
-- context builder
+### Track C: PCKC memory
 
-### Track D: product
-- MCP tool ergonomics
-- Docker operations
-- optional dashboard
-- audit UX
+- typed claim derivation
+- belief gate
+- proof attachment
+- contradiction and supersession handling
 
-## 20. Acceptance criteria
+### Track D: retrieval and graph
+
+- lexical + semantic hybrid retrieval
+- typed partitions
+- repository and session graph build
+- hierarchical communities
+- context builder and compiler
+
+### Track E: product surfaces
+
+- MCP ergonomics
+- dashboard/report surfaces
+- operational tooling
+
+## 21. Acceptance criteria
 
 The architecture is acceptable when:
 
 - all reads and writes are tenant-isolated
 - token-scoped clients can ingest and retrieve only allowed project/team data
-- memory search returns useful results from lexical and semantic signals
-- context packs are compact and provenance-aware
-- Claude, Codex, and Gemini can use the same normalized APIs
+- durable memory is claim- and proof-centric rather than summary-centric
+- belief-gated truth filtering works
+- retrieval combines lexical, semantic, and graph signals
+- repository questions can be answered from repository graph evidence
+- context packs are compact, provenance-aware, and budget-disciplined
+- contradictions and supersession are surfaced correctly
+- the same normalized APIs serve Claude, Codex, and Gemini clients
