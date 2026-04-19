@@ -110,6 +110,16 @@ app.get('/api/memory/:id', async (req, res) => {
   res.status(response.status).type(response.headers.get('content-type') ?? 'application/json').send(await response.text());
 });
 
+// claims/:id/govern — governance state transition
+app.post('/api/claims/:id/govern', async (req, res) => {
+  const response = await proxyJson(`/api/claims/${encodeURIComponent(req.params['id']!)}/govern`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(req.body),
+  });
+  res.status(response.status).type(response.headers.get('content-type') ?? 'application/json').send(await response.text());
+});
+
 // ── /api/dashboard/sessions — DB-backed paginated session list ──
 // The Rust API doesn't expose a cursor-friendly session listing, so the
 // dashboard queries Postgres directly under the same RLS context. The

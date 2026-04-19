@@ -93,4 +93,8 @@ export const ApiClient = {
   getWorkerQueue(): Promise<unknown> {
     return fetchJson('/api/dashboard/workers') as Promise<unknown>;
   },
+
+  governClaim(id: string, newState: string, reason?: string): Promise<unknown> {
+    return jsonPost(`/api/claims/${encodeURIComponent(id)}/govern`, { newState, reason }) as Promise<unknown>;
+  },
 };

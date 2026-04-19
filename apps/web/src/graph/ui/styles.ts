@@ -1258,4 +1258,43 @@ select { cursor: pointer; }
   margin-right: 8px;
   flex-shrink: 0;
 }
+
+/* ── Governance actions ── */
+.governance-actions {
+  padding: 10px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.governance-state-label {
+  font-size: 0.75rem;
+  color: #8b949e;
+  font-weight: 500;
+}
+
+.governance-reason {
+  font-size: 0.78rem;
+}
+
+.governance-btn-row {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.governance-btn {
+  background: transparent;
+  border: 1px solid;
+  border-radius: 6px;
+  padding: 5px 12px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s, opacity 0.15s;
+}
+
+.governance-btn:hover {
+  background: rgba(255, 255, 255, 0.06);
+}
 `;
