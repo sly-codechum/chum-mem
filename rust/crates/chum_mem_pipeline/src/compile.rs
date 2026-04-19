@@ -685,4 +685,215 @@ mod tests {
         let goals2 = infer_sub_goals("refactor the context module");
         assert!(goals2.contains(&SubGoal::Implementation));
     }
+
+    // ── v2.2.3: Section-aware fill tests ──────────────────────────
+
+    #[test]
+    fn core_trio_always_present_in_sub_goals() {
+        let goals = infer_sub_goals("do something generic");
+        assert!(goals.contains(&SubGoal::Decisions));
+        assert!(goals.contains(&SubGoal::ActiveTasks));
+        assert!(goals.contains(&SubGoal::Facts));
+    }
+
+    #[test]
+    fn section_fill_populates_all_typed_sections() {
+        let items = vec![
+            item(
+                MemoryType::Decision,
+                "use Rust",
+                10,
+                AuthorityClass::UserConfirmed,
+                VerificationStatus::UserConfirmed,
+            ),
+            item(
+                MemoryType::Task,
+                "finish tests",
+                10,
+                AuthorityClass::UserConfirmed,
+                VerificationStatus::UserConfirmed,
+            ),
+            item(
+                MemoryType::Fact,
+                "postgres 16",
+                10,
+                AuthorityClass::Repository,
+                VerificationStatus::Verified,
+            ),
+            item(
+                MemoryType::Bug,
+                "ranking drift",
+                10,
+                AuthorityClass::ToolVerified,
+                VerificationStatus::Verified,
+            ),
+            item(
+                MemoryType::Fix,
+                "fixed ranking",
+                10,
+                AuthorityClass::TestVerified,
+                VerificationStatus::Verified,
+            ),
+            item(
+                MemoryType::Constraint,
+                "no model-derived",
+                10,
+                AuthorityClass::UserConfirmed,
+                VerificationStatus::UserConfirmed,
+            ),
+            item(
+                MemoryType::OpenQuestion,
+                "how to scale",
+                10,
+                AuthorityClass::SessionDerived,
+                VerificationStatus::Verified,
+            ),
+            item(
+                MemoryType::ImplementationDetail,
+                "weighted set-cover",
+                10,
+                AuthorityClass::Repository,
+                VerificationStatus::Verified,
+            ),
+        ];
+
+        let response = compile_minimal_proof_set(
+            "debug the bug in the implementation and answer open questions about constraints",
+            &items,
+            10_000,
+            RetrievalIntent::Hybrid,
+        );
+
+        let pack = &response.context_pack;
+        assert!(!pack.recent_decisions.is_empty(), "decisions should be filled");
+        assert!(!pack.active_tasks.is_empty(), "tasks should be filled");
+        assert!(!pack.project_facts.is_empty(), "facts should be filled");
+        assert!(!pack.known_bugs.is_empty(), "bugs should be filled");
+        assert!(!pack.verified_fixes.is_empty(), "fixes should be filled");
+        assert!(!pack.constraints.is_empty(), "constraints should be filled");
+        assert!(!pack.open_questions.is_empty(), "open_questions should be filled");
+        assert!(!pack.implementation_notes.is_empty(), "implementation should be filled");
+        assert!(
+            pack.unknowns.iter().all(|u| !u.starts_with("proof_gap:")),
+            "no proof gaps expected: {:?}",
+            pack.unknowns
+        );
+    }
+
+    #[test]
+    fn proof_gap_emitted_for_missing_bug_section() {
+        let items = vec![
+            item(
+                MemoryType::Decision,
+                "use Rust",
+                10,
+                AuthorityClass::UserConfirmed,
+                VerificationStatus::UserConfirmed,
+            ),
+            item(
+                MemoryType::Task,
+                "finish work",
+                10,
+                AuthorityClass::UserConfirmed,
+                VerificationStatus::UserConfirmed,
+            ),
+            item(
+                MemoryType::Fact,
+                "postgres 16",
+                10,
+                AuthorityClass::Repository,
+                VerificationStatus::Verified,
+            ),
+        ];
+
+        let response = compile_minimal_proof_set(
+            "debug the bug in the ranker",
+            &items,
+            10_000,
+            RetrievalIntent::Hybrid,
+        );
+
+        let gaps: Vec<_> = response
+            .context_pack
+            .unknowns
+            .iter()
+            .filter(|u| u.starts_with("proof_gap:"))
+            .collect();
+        assert!(
+            gaps.iter().any(|g| g.contains("bugs")),
+            "should emit proof_gap for missing bugs section: {gaps:?}"
+        );
+        assert!(
+            gaps.iter().any(|g| g.contains("fixes")),
+            "should emit proof_gap for missing fixes section: {gaps:?}"
+        );
+    }
+
+    // ── Supersession correctness in compilation ───────────────────
+
+    #[test]
+    fn superseded_claims_excluded_from_cover() {
+        let mut old = item(
+            MemoryType::Fact,
+            "old fact",
+            10,
+            AuthorityClass::Repository,
+            VerificationStatus::Verified,
+        );
+        old.superseded_by = Some(uuid::Uuid::from_u128(42));
+
+        let current = item(
+            MemoryType::Fact,
+            "current fact",
+            10,
+            AuthorityClass::Repository,
+            VerificationStatus::Verified,
+        );
+
+        let items = vec![old, current];
+        let response = compile_minimal_proof_set(
+            "get the facts",
+            &items,
+            1000,
+            RetrievalIntent::Hybrid,
+        );
+
+        assert_eq!(response.context_pack.project_facts.len(), 1);
+        assert_eq!(
+            response.context_pack.project_facts[0].title,
+            "current fact"
+        );
+    }
+
+    #[test]
+    fn contradicted_claims_excluded_from_cover() {
+        let contradicted = item(
+            MemoryType::Decision,
+            "contradicted approach",
+            10,
+            AuthorityClass::UserConfirmed,
+            VerificationStatus::Contradicted,
+        );
+        let valid = item(
+            MemoryType::Decision,
+            "valid approach",
+            10,
+            AuthorityClass::UserConfirmed,
+            VerificationStatus::UserConfirmed,
+        );
+
+        let items = vec![contradicted, valid];
+        let response = compile_minimal_proof_set(
+            "resume work",
+            &items,
+            1000,
+            RetrievalIntent::Hybrid,
+        );
+
+        assert_eq!(response.context_pack.recent_decisions.len(), 1);
+        assert_eq!(
+            response.context_pack.recent_decisions[0].title,
+            "valid approach"
+        );
+    }
 }

@@ -121,6 +121,8 @@ pub struct MemorySearchRow {
     pub claim_valid_to: Option<time::OffsetDateTime>,
     pub claim_superseded_by: Option<Uuid>,
     pub active_conflict_count: i64,
+    /// v2.2.3: Governance state from claims table.
+    pub claim_governance_state: Option<String>,
 }
 
 #[derive(Debug, Clone, FromRow)]
@@ -154,6 +156,8 @@ pub struct MemoryDetailRow {
     pub claim_valid_to: Option<time::OffsetDateTime>,
     pub claim_superseded_by: Option<Uuid>,
     pub active_conflict_count: i64,
+    /// v2.2.3: Governance state.
+    pub claim_governance_state: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -2020,7 +2024,8 @@ pub async fn load_memory_search_rows(
           c.valid_from as claim_valid_from,
           c.valid_to as claim_valid_to,
           c.superseded_by as claim_superseded_by,
-          coalesce(c.active_conflict_count, 0)::bigint as active_conflict_count
+          coalesce(c.active_conflict_count, 0)::bigint as active_conflict_count,
+          c.governance_state as claim_governance_state
         from public.memories m
         left join public.sessions s on s.id = m.session_id
         left join lateral (
@@ -2038,6 +2043,7 @@ pub async fn load_memory_search_rows(
             cl.valid_to,
             cl.superseded_by,
             cl.admitted,
+            cl.governance_state,
             (
               select count(*)::bigint
               from public.claim_edges ce
@@ -2080,6 +2086,7 @@ pub async fn load_memory_search_rows(
               and c.superseded_by is null
               and c.valid_to is null
               and c.verification_status <> 'contradicted'
+              and coalesce(c.governance_state, 'active') not in ('archived', 'rejected')
             )
           )
           and m.search_vector @@ websearch_to_tsquery('english', $4)
@@ -2226,7 +2233,8 @@ pub async fn load_memory(
               and related.admitted = true
               and related.superseded_by is null
               and related.valid_to is null
-          ), 0)::bigint as active_conflict_count
+          ), 0)::bigint as active_conflict_count,
+          c.governance_state as claim_governance_state
         from public.memories m
         left join public.claims c on c.memory_id = m.id
         where m.id = $1
@@ -2290,7 +2298,8 @@ pub async fn load_memories_batch(
               and related.admitted = true
               and related.superseded_by is null
               and related.valid_to is null
-          ), 0)::bigint as active_conflict_count
+          ), 0)::bigint as active_conflict_count,
+          c.governance_state as claim_governance_state
         from public.memories m
         left join public.claims c on c.memory_id = m.id
         where m.id = any($1)
@@ -2430,7 +2439,8 @@ pub async fn load_memories_for_chroma_scoped(
           null::timestamptz as claim_valid_from,
           null::timestamptz as claim_valid_to,
           null::uuid as claim_superseded_by,
-          0::bigint as active_conflict_count
+          0::bigint as active_conflict_count,
+          null::text as claim_governance_state
         from public.memories m
         left join public.sessions s on s.id = m.session_id
         where m.organization_id = $1

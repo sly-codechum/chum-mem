@@ -140,6 +140,64 @@ pub enum ClaimRelationType {
     DerivedFrom,
 }
 
+/// v2.2.3: Governance state for durable claims.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum GovernanceState {
+    #[default]
+    Active,
+    Pinned,
+    Archived,
+    Rejected,
+}
+
+impl GovernanceState {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            GovernanceState::Active => "active",
+            GovernanceState::Pinned => "pinned",
+            GovernanceState::Archived => "archived",
+            GovernanceState::Rejected => "rejected",
+        }
+    }
+
+    pub fn is_current(self) -> bool {
+        matches!(self, GovernanceState::Active | GovernanceState::Pinned)
+    }
+}
+
+impl std::str::FromStr for GovernanceState {
+    type Err = &'static str;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "active" => Ok(Self::Active),
+            "pinned" => Ok(Self::Pinned),
+            "archived" => Ok(Self::Archived),
+            "rejected" => Ok(Self::Rejected),
+            _ => Err("invalid governance state"),
+        }
+    }
+}
+
+/// v2.2.3: Request to transition a claim's governance state.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GovernClaimRequest {
+    pub new_state: GovernanceState,
+    pub reason: Option<String>,
+}
+
+/// v2.2.3: Response from a governance transition.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GovernClaimResponse {
+    pub claim_id: Uuid,
+    pub previous_state: GovernanceState,
+    pub new_state: GovernanceState,
+    pub transition_id: Uuid,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum SearchMode {
@@ -935,5 +993,66 @@ mod tests {
         };
 
         assert!(request.validate().is_ok());
+    }
+
+    // ── v2.2.3: Governance state tests ────────────────────────────
+
+    #[test]
+    fn governance_state_parse_roundtrip() {
+        for (text, expected) in [
+            ("active", GovernanceState::Active),
+            ("pinned", GovernanceState::Pinned),
+            ("archived", GovernanceState::Archived),
+            ("rejected", GovernanceState::Rejected),
+        ] {
+            let parsed: GovernanceState = text.parse().unwrap();
+            assert_eq!(parsed, expected);
+            assert_eq!(parsed.as_str(), text);
+        }
+    }
+
+    #[test]
+    fn governance_state_invalid_parse() {
+        assert!("bogus".parse::<GovernanceState>().is_err());
+        assert!("".parse::<GovernanceState>().is_err());
+        assert!("Active".parse::<GovernanceState>().is_err()); // case-sensitive
+    }
+
+    #[test]
+    fn governance_is_current() {
+        assert!(GovernanceState::Active.is_current());
+        assert!(GovernanceState::Pinned.is_current());
+        assert!(!GovernanceState::Archived.is_current());
+        assert!(!GovernanceState::Rejected.is_current());
+    }
+
+    #[test]
+    fn governance_default_is_active() {
+        assert_eq!(GovernanceState::default(), GovernanceState::Active);
+    }
+
+    #[test]
+    fn governance_serde_roundtrip() {
+        let request = GovernClaimRequest {
+            new_state: GovernanceState::Pinned,
+            reason: Some("critical invariant".to_string()),
+        };
+        let json = serde_json::to_string(&request).unwrap();
+        let parsed: GovernClaimRequest = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.new_state, GovernanceState::Pinned);
+        assert_eq!(parsed.reason.as_deref(), Some("critical invariant"));
+    }
+
+    #[test]
+    fn governance_response_serde() {
+        let response = GovernClaimResponse {
+            claim_id: Uuid::nil(),
+            previous_state: GovernanceState::Active,
+            new_state: GovernanceState::Archived,
+            transition_id: Uuid::nil(),
+        };
+        let json = serde_json::to_string(&response).unwrap();
+        assert!(json.contains("\"previousState\""));
+        assert!(json.contains("\"archived\""));
     }
 }
