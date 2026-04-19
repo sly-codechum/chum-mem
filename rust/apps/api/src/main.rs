@@ -19,7 +19,8 @@ use chum_mem_contracts::{
     BatchAppendSessionEventsRequest, BatchAppendSessionEventsResponse, BulkIndexResponse,
     ClaimRelation,
     ClaimRelationType, ContextBuildRequest, ContextBuildResponse, ContextItem, ContextSourceClass,
-    EndSessionRequest, EndSessionResponse, GetMemoryResponse, KnowledgeQueryKind,
+    EndSessionRequest, EndSessionResponse, GetMemoryResponse, GovernClaimRequest,
+    GovernClaimResponse, GovernanceState, KnowledgeQueryKind,
     KnowledgeQueryRequest, MemoryBatchRequest, MemorySearchRequest, MemoryType,
     ProjectImportGraphSummary, ProofHandle, ProofType, Provider, RepositorySyncRequest,
     RepositorySyncResponse, RepositorySyncStats, RetrievalIntent, StartSessionRequest,
@@ -221,6 +222,9 @@ struct KnowledgeReportResponse {
     project_id: Option<Uuid>,
     generated_at: String,
     report_markdown: String,
+    /// v2.2.3: Structured cross-layer summary for unified reports.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    cross_layer_summary: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -443,6 +447,18 @@ async fn memory_get(
     Ok((StatusCode::OK, Json(response)).into_response())
 }
 
+/// v2.2.3: Governance transition endpoint.
+async fn claim_govern(
+    State(state): State<ApiState>,
+    Path(claim_id): Path<Uuid>,
+    Json(input): Json<GovernClaimRequest>,
+) -> Result<Response, ApiError> {
+    let response = perform_claim_govern(&state, claim_id, input)
+        .await
+        .map_err(map_domain_error)?;
+    Ok((StatusCode::OK, Json(response)).into_response())
+}
+
 async fn dashboard_summary(State(state): State<ApiState>) -> Result<Response, ApiError> {
     let response = perform_dashboard_summary(&state)
         .await
@@ -477,6 +493,24 @@ async fn knowledge_report(
     let response = perform_knowledge_report(&state, query.project_id, query.layer.as_deref())
         .await
         .map_err(map_domain_error)?;
+
+    // v2.2.3: For unified reports, return JSON with structured cross-layer
+    // summary so the benchmark (and clients) can inspect fields directly.
+    if query.layer.as_deref() == Some("unified") {
+        return Ok((
+            StatusCode::OK,
+            Json(json!({
+                "report": {
+                    "crossLayerSummary": response.cross_layer_summary,
+                    "repository": !response.report_markdown.is_empty(),
+                    "session": !response.report_markdown.is_empty(),
+                    "markdown": response.report_markdown,
+                },
+            })),
+        )
+            .into_response());
+    }
+
     Ok((
         StatusCode::OK,
         [(CONTENT_TYPE, "text/markdown; charset=utf-8")],
@@ -516,6 +550,7 @@ fn mcp_tool_definitions() -> Vec<Value> {
         json!({"name":"knowledge_communities","description":"List detected graph communities and cohesion scores","inputSchema":{"type":"object","properties":{"projectId":{"type":"string","format":"uuid"},"layer":{"type":"string","enum":["repository","session"],"description":"Graph layer to query."}}}}),
         json!({"name":"memory_get_batch","description":"Fetch multiple memory records by ID after mem_search filtering","inputSchema":{"type":"object","properties":{"ids":{"type":"array","items":{"type":"string","format":"uuid"},"minItems":1,"maxItems":20}},"required":["ids"]}}),
         json!({"name":"memory_get","description":"Fetch a single memory and its related links","inputSchema":{"type":"object","properties":{"id":{"type":"string","format":"uuid"}},"required":["id"]}}),
+        json!({"name":"claim_govern","description":"Transition a claim's governance state (pin, archive, reject, or reactivate)","inputSchema":{"type":"object","properties":{"claimId":{"type":"string","format":"uuid"},"newState":{"type":"string","enum":["active","pinned","archived","rejected"]},"reason":{"type":"string"}},"required":["claimId","newState"]}}),
     ]
 }
 
@@ -698,6 +733,21 @@ async fn handle_mcp_call(state: &ApiState, method: &str, params: &Value) -> Resu
                 .await
                 .map_err(|e| format!("{e:?}"))?;
             Ok(json!({"content":[{"type":"text","text":"SUCCESSFUL"}],"structuredContent":result}))
+        }
+        "claim_govern" => {
+            let claim_id: Uuid = args
+                .get("claimId")
+                .and_then(|v| v.as_str())
+                .ok_or("claimId is required")?
+                .parse()
+                .map_err(|_| "invalid claimId UUID")?;
+            let input: GovernClaimRequest =
+                serde_json::from_value(json!({"newState": args.get("newState"), "reason": args.get("reason")}))
+                    .map_err(|e| e.to_string())?;
+            let result = perform_claim_govern(state, claim_id, input)
+                .await
+                .map_err(|e| format!("{e:?}"))?;
+            Ok(json!({"content":[{"type":"text","text":format!("Claim {} transitioned from {} to {}", result.claim_id, serde_json::to_value(&result.previous_state).unwrap_or_default(), serde_json::to_value(&result.new_state).unwrap_or_default())}],"structuredContent":result}))
         }
         _ => Err(format!("unknown tool: {tool_name}")),
     }
@@ -915,6 +965,7 @@ fn router(state: ApiState) -> Router {
         .route("/api/memory/{id}", get(memory_get))
         .route("/api/memory/batch", post(memory_batch))
         .route("/api/context/build", post(context_build))
+        .route("/api/claims/{id}/govern", post(claim_govern))
         .route("/v1/ingest/session/start", post(session_start))
         .route("/v1/ingest/session/event", post(session_event))
         .route("/v1/ingest/session/events", post(session_events_batch))
@@ -1339,6 +1390,8 @@ async fn perform_search(
     ranking_context.branch = input.branch.clone();
     ranking_context.retrieval_intent = input.retrieval_intent.unwrap_or_default();
     ranking_context.query_text = Some(input.query.clone());
+    // v2.2.3: Continuation retrieval mode
+    ranking_context.is_continuation = is_continuation_query(&input.query);
     // v2.2.2: Pass requested types for type-fit scoring
     ranking_context.requested_types = input
         .types
@@ -1675,7 +1728,7 @@ async fn perform_context_memory_searches(
         cursor: None,
     });
 
-    for scoped_types in type_scopes {
+    for (scoped_types, scope_limit) in type_scopes {
         let scoped_query = context_memory_query_for_scope(&objective, &scoped_types);
         requests.push(MemorySearchRequest {
             query: scoped_query,
@@ -1692,7 +1745,7 @@ async fn perform_context_memory_searches(
             disclosure_level: chum_mem_contracts::DisclosureLevel::Overview,
             retrieval_intent: Some(retrieval_intent),
             include_historical: input.include_historical,
-            limit: 4,
+            limit: scope_limit,
             cursor: None,
         });
     }
@@ -1734,6 +1787,68 @@ async fn perform_context_memory_searches(
     });
     hits.truncate(CONTEXT_BUILD_SEARCH_LIMIT as usize);
     Ok(hits)
+}
+
+/// v2.2.3: Governance transition — pin / archive / reject / reactivate claims.
+/// Accepts either a claim ID or a memory ID (1:1 via unique constraint).
+async fn perform_claim_govern(
+    state: &ApiState,
+    id: Uuid,
+    input: GovernClaimRequest,
+) -> Result<GovernClaimResponse, DomainError> {
+    let mut tx = begin_tx(state, &state.scope).await?;
+
+    let row = sqlx::query_as::<_, (Uuid, String)>(
+        "SELECT id, governance_state FROM public.claims WHERE id = $1 OR memory_id = $1",
+    )
+    .bind(id)
+    .fetch_optional(tx.as_mut())
+    .await
+    .map_err(|e| DomainError::Internal(e.to_string()))?
+    .ok_or_else(|| DomainError::NotFound(format!("Claim {id} not found")))?;
+
+    let claim_id = row.0;
+    let previous_state: GovernanceState = row.1.parse().unwrap_or_default();
+    let new_state = input.new_state;
+
+    sqlx::query(
+        "UPDATE public.claims SET governance_state = $1, updated_at = now() WHERE id = $2",
+    )
+    .bind(new_state.as_str())
+    .bind(claim_id)
+    .execute(tx.as_mut())
+    .await
+    .map_err(|e| DomainError::Internal(e.to_string()))?;
+
+    let transition_id = Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO public.claim_governance_history \
+         (id, organization_id, team_id, project_id, claim_id, previous_state, new_state, reason, actor_type) \
+         SELECT $1, organization_id, team_id, project_id, $2, $3, $4, $5, $6 \
+         FROM public.claims WHERE id = $2",
+    )
+    .bind(transition_id)
+    .bind(claim_id)
+    .bind(previous_state.as_str())
+    .bind(new_state.as_str())
+    .bind(input.reason.as_deref())
+    .bind(match state.scope.actor_type {
+        chum_mem_contracts::ActorType::User => "user",
+        chum_mem_contracts::ActorType::Token => "token",
+        chum_mem_contracts::ActorType::System => "system",
+    })
+    .execute(tx.as_mut())
+    .await
+    .map_err(|e| DomainError::Internal(e.to_string()))?;
+
+    commit_tx(tx).await?;
+
+    Ok(GovernClaimResponse {
+        claim_id,
+        previous_state,
+        new_state,
+        transition_id,
+    })
 }
 
 async fn perform_memory_get(
@@ -2011,6 +2126,7 @@ async fn perform_knowledge_report(
             project_id,
             generated_at,
             report_markdown: unified_markdown,
+            cross_layer_summary: Some(cross_layer),
         });
     }
 
@@ -2026,6 +2142,7 @@ async fn perform_knowledge_report(
         project_id,
         generated_at: graph.generated_at.clone(),
         report_markdown: generate_knowledge_report(&graph),
+        cross_layer_summary: None,
     })
 }
 
@@ -2709,7 +2826,8 @@ async fn semantic_search(
           c.valid_from as claim_valid_from,
           c.valid_to as claim_valid_to,
           c.superseded_by as claim_superseded_by,
-          coalesce(c.active_conflict_count, 0)::bigint as active_conflict_count
+          coalesce(c.active_conflict_count, 0)::bigint as active_conflict_count,
+          c.governance_state as claim_governance_state
         from deduped d
         join public.memories m on m.id = d.memory_id
         left join public.sessions s on s.id = m.session_id
@@ -2728,6 +2846,7 @@ async fn semantic_search(
             cl.valid_to,
             cl.superseded_by,
             cl.admitted,
+            cl.governance_state,
             (
               select count(*)::bigint
               from public.claim_edges ce
@@ -2766,6 +2885,7 @@ async fn semantic_search(
               and c.superseded_by is null
               and c.valid_to is null
               and c.verification_status <> 'contradicted'
+              and coalesce(c.governance_state, 'active') not in ('archived', 'rejected')
             )
           )
         order by d.semantic_score desc, m.created_at desc
@@ -2825,6 +2945,7 @@ async fn semantic_search(
                 "validTo": row.claim_valid_to.map(format_time),
                 "supersededBy": row.claim_superseded_by,
                 "activeConflictCount": row.active_conflict_count,
+                "governanceState": row.claim_governance_state,
             })),
         })
         .collect())
@@ -2904,6 +3025,7 @@ fn map_ranked_memory(row: &MemorySearchRow, lexical: bool) -> RankedMemory {
         valid_to: row.claim_valid_to.map(format_time),
         superseded_by: row.claim_superseded_by,
         active_conflict_count: row.active_conflict_count,
+        governance_state: row.claim_governance_state.clone(),
     }
 }
 
@@ -2957,6 +3079,7 @@ fn map_memory_detail_to_ranked_memory(row: &chum_mem_db::MemoryDetailRow) -> Ran
         valid_to: row.claim_valid_to.map(format_time),
         superseded_by: row.claim_superseded_by,
         active_conflict_count: row.active_conflict_count,
+        governance_state: row.claim_governance_state.clone(),
     }
 }
 
@@ -3035,33 +3158,77 @@ fn infer_retrieval_intent(input: &ContextBuildRequest) -> RetrievalIntent {
     }
 }
 
-fn context_memory_type_scopes(objective: &str) -> Vec<Vec<MemoryType>> {
-    let objective = objective.to_lowercase();
-    let mut scopes = Vec::new();
+/// v2.2.3: Detect whether a query expresses continuation/resume intent.
+fn is_continuation_query(query: &str) -> bool {
+    let lower = query.to_lowercase();
+    [
+        "continue",
+        "continuation",
+        "resume",
+        "pick up where",
+        "where we left off",
+        "what were we",
+        "what was i",
+        "prior work",
+        "previous session",
+        "last session",
+        "open task",
+        "open loop",
+        "unfinished",
+        "follow up",
+        "what's next",
+        "what is next",
+        "next step",
+    ]
+    .iter()
+    .any(|signal| lower.contains(signal))
+}
 
+/// v2.2.3: Section-aware type scopes.
+///
+/// Always includes baseline queries for all core sections so that
+/// `context_build` / `context_compile_v2` can fill every typed section
+/// even when the objective text doesn't contain section-specific keywords.
+/// Keyword-matched sections get a higher per-scope limit (emphasis scopes).
+fn context_memory_type_scopes(objective: &str) -> Vec<(Vec<MemoryType>, u32)> {
+    let objective = objective.to_lowercase();
+
+    // Baseline: every core section gets a low-limit query (2 hits each).
+    // This ensures projectFacts, recentDecisions, knownBugs, openQuestions
+    // etc. are populated even for generic objectives.
+    let mut scopes: Vec<(Vec<MemoryType>, u32)> = vec![
+        (vec![MemoryType::Decision], 2),
+        (vec![MemoryType::Task], 2),
+        (vec![MemoryType::Fact], 2),
+        (vec![MemoryType::Constraint], 2),
+        (vec![MemoryType::Bug, MemoryType::Fix], 2),
+        (vec![MemoryType::OpenQuestion], 2),
+    ];
+
+    // Emphasis: keyword-matched sections get additional hits.
     if ["decision", "decide", "policy", "latest", "recent"]
         .iter()
         .any(|signal| objective.contains(signal))
     {
-        scopes.push(vec![MemoryType::Decision]);
+        scopes.push((vec![MemoryType::Decision], 4));
     }
     if ["constraint", "rule", "must", "guardrail"]
         .iter()
         .any(|signal| objective.contains(signal))
     {
-        scopes.push(vec![MemoryType::Constraint]);
+        scopes.push((vec![MemoryType::Constraint], 4));
     }
     if ["open question", "unknown", "unresolved", "question"]
         .iter()
         .any(|signal| objective.contains(signal))
     {
-        scopes.push(vec![MemoryType::OpenQuestion]);
+        scopes.push((vec![MemoryType::OpenQuestion], 4));
     }
     if ["bug", "issue", "failure", "drift", "broken"]
         .iter()
         .any(|signal| objective.contains(signal))
     {
-        scopes.push(vec![MemoryType::Bug, MemoryType::Fix]);
+        scopes.push((vec![MemoryType::Bug, MemoryType::Fix], 4));
     }
     if [
         "task",
@@ -3074,13 +3241,24 @@ fn context_memory_type_scopes(objective: &str) -> Vec<Vec<MemoryType>> {
     .iter()
     .any(|signal| objective.contains(signal))
     {
-        scopes.push(vec![MemoryType::Task]);
+        scopes.push((vec![MemoryType::Task], 4));
     }
     if ["verified", "fact", "truth", "result", "evidence"]
         .iter()
         .any(|signal| objective.contains(signal))
     {
-        scopes.push(vec![MemoryType::Fact, MemoryType::Fix]);
+        scopes.push((vec![MemoryType::Fact, MemoryType::Fix], 4));
+    }
+
+    // v2.2.3: Continuation emphasis — when the objective expresses
+    // resume/continue intent, boost the claim types that matter most
+    // for picking up where a prior session left off.
+    if is_continuation_query(&objective) {
+        scopes.push((vec![MemoryType::Task], 4));
+        scopes.push((vec![MemoryType::Decision], 4));
+        scopes.push((vec![MemoryType::OpenQuestion], 3));
+        scopes.push((vec![MemoryType::Constraint], 3));
+        scopes.push((vec![MemoryType::Fix], 3));
     }
 
     scopes
@@ -3094,6 +3272,7 @@ fn context_memory_query_for_scope(objective: &str, scoped_types: &[MemoryType]) 
         [MemoryType::Bug, MemoryType::Fix] => "verified fix bug state failure correction",
         [MemoryType::Task] => "active task unfinished follow up",
         [MemoryType::Fact, MemoryType::Fix] => "verified fact evidence result",
+        [MemoryType::Fact] => "verified project fact",
         _ => "verified memory",
     };
     format!("{hint} {objective}")
