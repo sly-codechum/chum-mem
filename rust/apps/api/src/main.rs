@@ -2171,25 +2171,34 @@ async fn perform_dashboard_graph(
     // When the caller specifies a layer, return only that layer's snapshot.
     // When no layer is specified (e.g. the MCP graph_snapshot tool), merge
     // both layers so callers without layer awareness see the full graph.
+    let has_project = project_id.is_some();
     let (repo_snapshot, session_snapshot) = match layer {
         Some("repository") => (
-            load_latest_knowledge_graph_by_type(&mut tx, &context, Some("repository")).await?,
+            if has_project {
+                load_latest_knowledge_graph_by_type(&mut tx, &context, Some("repository")).await?
+            } else {
+                load_merged_snapshots_by_type(&mut tx, &context, "repository").await?
+            },
             None,
         ),
         Some("session") => (
             None,
-            if project_id.is_some() {
+            if has_project {
                 load_latest_knowledge_graph_by_type(&mut tx, &context, Some("session")).await?
             } else {
-                load_merged_session_snapshots(&mut tx, &context).await?
+                load_merged_snapshots_by_type(&mut tx, &context, "session").await?
             },
         ),
         _ => (
-            load_latest_knowledge_graph_by_type(&mut tx, &context, Some("repository")).await?,
-            if project_id.is_some() {
+            if has_project {
+                load_latest_knowledge_graph_by_type(&mut tx, &context, Some("repository")).await?
+            } else {
+                load_merged_snapshots_by_type(&mut tx, &context, "repository").await?
+            },
+            if has_project {
                 load_latest_knowledge_graph_by_type(&mut tx, &context, Some("session")).await?
             } else {
-                load_merged_session_snapshots(&mut tx, &context).await?
+                load_merged_snapshots_by_type(&mut tx, &context, "session").await?
             },
         ),
     };
@@ -4016,9 +4025,10 @@ async fn load_latest_knowledge_graph_by_type(
         .map_err(|error| DomainError::Internal(error.to_string()))
 }
 
-async fn load_merged_session_snapshots(
+async fn load_merged_snapshots_by_type(
     tx: &mut Transaction<'_, Postgres>,
     context: &RepositoryContext,
+    snapshot_type: &str,
 ) -> Result<Option<KnowledgeGraph>, DomainError> {
     let rows = sqlx::query(
         r#"
@@ -4026,12 +4036,13 @@ async fn load_merged_session_snapshots(
         from public.knowledge_snapshots
         where organization_id = $1
           and team_id = $2
-          and snapshot_type = 'session'
+          and snapshot_type = $3
         order by project_id, created_at desc
         "#,
     )
     .bind(context.organization_id)
     .bind(context.team_id)
+    .bind(snapshot_type)
     .fetch_all(&mut **tx)
     .await
     .map_err(DbError::from)?;
