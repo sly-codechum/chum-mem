@@ -7,6 +7,7 @@ type Events = {
   'graph-filter-change': { visibleTypes: Set<string>; layer: string };
   'shortest-path-select': { sourceId: string; targetId: string };
   'focus-node': { nodeId: string };
+  'project-change': { projectId: string | undefined };
 };
 
 type EventPayload<K extends keyof Events> = Events[K] extends void ? [] : [Events[K]];

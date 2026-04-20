@@ -81,6 +81,9 @@ pub struct RankedMemory {
     pub superseded_by: Option<Uuid>,
     #[serde(default)]
     pub active_conflict_count: i64,
+    /// v2.2.3: Governance state (active/pinned/archived/rejected).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub governance_state: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -112,6 +115,10 @@ pub struct RankingContextInner {
     /// v2.2.2: Memory → community_id lookup. Memories absent from this map
     /// are treated as unaffiliated and receive no community boost.
     pub memory_community: HashMap<Uuid, usize>,
+    /// v2.2.3: Continuation retrieval mode. When true, the ranker boosts
+    /// unsuperseded active claims (task, decision, constraint, open_question,
+    /// recent fix) and penalizes semantically-similar but stale claims.
+    pub is_continuation: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -221,6 +228,7 @@ pub fn merge_hybrid_results(
                 active_conflict_count: metadata_number(&metadata, "activeConflictCount")
                     .map(|value| value as i64)
                     .unwrap_or(0),
+                governance_state: metadata_string(&metadata, "governanceState"),
             },
         );
     }
@@ -357,6 +365,40 @@ fn with_ranking_signals(mut hit: RankedMemory, context: &RankingContext) -> Rank
     });
     let community_boost = community_score.map(normalize_score).unwrap_or(0.0) * 0.15;
 
+    // v2.2.3: Continuation retrieval boost. When the query is a
+    // continuation/resume, boost unsuperseded actionable claims and
+    // penalize stale/superseded ones harder.
+    let continuation_boost = if context.is_continuation {
+        let is_unsuperseded = hit.superseded_by.is_none() && hit.superseded_at.is_none();
+        let is_actionable = matches!(
+            hit.memory_type,
+            MemoryType::Task
+                | MemoryType::Decision
+                | MemoryType::Constraint
+                | MemoryType::OpenQuestion
+                | MemoryType::Fix
+        );
+        let is_recent = recency_score >= 0.65;
+        match (is_unsuperseded, is_actionable, is_recent) {
+            (true, true, true) => 0.30,
+            (true, true, false) => 0.15,
+            (true, false, true) => 0.05,
+            (false, _, _) => -0.20,
+            _ => 0.0,
+        }
+    } else {
+        0.0
+    };
+
+    // v2.2.3: Governance-aware scoring. Pinned claims get a boost,
+    // archived/rejected are penalized out of current-truth results.
+    let governance_boost = match hit.governance_state.as_deref() {
+        Some("pinned") => 0.20,
+        Some("archived") => -0.50,
+        Some("rejected") => -0.80,
+        _ => 0.0,
+    };
+
     let score = lexical * 0.32
         + semantic * 0.30
         + normalize_score(session_relevance_score) * 0.12
@@ -369,6 +411,8 @@ fn with_ranking_signals(mut hit: RankedMemory, context: &RankingContext) -> Rank
         + verification_boost
         + type_fit_boost
         + community_boost
+        + continuation_boost
+        + governance_boost
         - normalize_score(freshness_penalty) * 0.10
         - normalize_score(superseded_penalty) * 0.10
         - conflict_penalty
@@ -766,4 +810,319 @@ fn now_rfc3339() -> String {
     time::OffsetDateTime::now_utc()
         .format(&time::format_description::well_known::Rfc3339)
         .unwrap_or_else(|_| "1970-01-01T00:00:00Z".to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_hit(memory_type: MemoryType, title: &str) -> RankedMemory {
+        RankedMemory {
+            id: Uuid::from_u128(rand_u128(title)),
+            project_id: Uuid::nil(),
+            memory_type,
+            title: title.to_string(),
+            summary: title.to_string(),
+            score: 0.5,
+            created_at: now_rfc3339(),
+            session_ids: Vec::new(),
+            provenance: Vec::new(),
+            proof_handles: Vec::new(),
+            lexical_score: Some(0.5),
+            semantic_score: Some(0.5),
+            exact_session_match: None,
+            session_relevance_score: None,
+            graph_proximity_score: None,
+            recency_score: None,
+            importance_score: Some(0.5),
+            confidence_score: Some(0.5),
+            freshness_penalty: None,
+            superseded_penalty: None,
+            community_score: None,
+            repo_url: None,
+            branch: None,
+            superseded_at: None,
+            related_memory_ids: Vec::new(),
+            source_class: None,
+            ranking_role: None,
+            claim_id: None,
+            claim_key: None,
+            claim_type: None,
+            authority_class: Some(AuthorityClass::UserConfirmed),
+            verification_status: Some(VerificationStatus::Verified),
+            proof_type: None,
+            valid_from: None,
+            valid_to: None,
+            superseded_by: None,
+            active_conflict_count: 0,
+            governance_state: None,
+        }
+    }
+
+    fn rand_u128(seed: &str) -> u128 {
+        let mut h: u128 = 0;
+        for b in seed.bytes() {
+            h = h.wrapping_mul(31).wrapping_add(b as u128);
+        }
+        h
+    }
+
+    fn default_context() -> RankingContext {
+        RankingContext {
+            retrieval_intent: RetrievalIntent::Hybrid,
+            ..Default::default()
+        }
+    }
+
+    // ── Continuation retrieval tests ──────────────────────────────
+
+    #[test]
+    fn continuation_boosts_unsuperseded_actionable_recent() {
+        let task = make_hit(MemoryType::Task, "finish pipeline");
+        let ctx = RankingContext {
+            is_continuation: true,
+            retrieval_intent: RetrievalIntent::Hybrid,
+            ..Default::default()
+        };
+        let ranked = with_ranking_signals(task.clone(), &ctx);
+
+        let ctx_off = RankingContext {
+            is_continuation: false,
+            retrieval_intent: RetrievalIntent::Hybrid,
+            ..Default::default()
+        };
+        let baseline = with_ranking_signals(task, &ctx_off);
+
+        assert!(
+            ranked.score > baseline.score,
+            "continuation should boost unsuperseded task: {} vs {}",
+            ranked.score,
+            baseline.score
+        );
+    }
+
+    #[test]
+    fn continuation_penalizes_superseded() {
+        let mut hit = make_hit(MemoryType::Decision, "old decision");
+        hit.superseded_by = Some(Uuid::from_u128(999));
+        let ctx = RankingContext {
+            is_continuation: true,
+            retrieval_intent: RetrievalIntent::Hybrid,
+            ..Default::default()
+        };
+        let ranked = with_ranking_signals(hit.clone(), &ctx);
+
+        let ctx_off = RankingContext {
+            is_continuation: false,
+            retrieval_intent: RetrievalIntent::Hybrid,
+            ..Default::default()
+        };
+        let baseline = with_ranking_signals(hit, &ctx_off);
+
+        assert!(
+            ranked.score < baseline.score,
+            "continuation should penalize superseded: {} vs {}",
+            ranked.score,
+            baseline.score
+        );
+    }
+
+    #[test]
+    fn continuation_no_effect_when_disabled() {
+        let task = make_hit(MemoryType::Task, "some task");
+        let ctx = default_context();
+        let ranked = with_ranking_signals(task, &ctx);
+        // No continuation boost/penalty should appear — continuation_boost = 0.0
+        // Score should be the standard hybrid formula
+        assert!(ranked.score > 0.0, "should have positive score");
+    }
+
+    #[test]
+    fn continuation_prefers_tasks_over_summaries() {
+        let task = make_hit(MemoryType::Task, "open migration task");
+        let summary = make_hit(MemoryType::Summary, "session summary");
+        let ctx = RankingContext {
+            is_continuation: true,
+            retrieval_intent: RetrievalIntent::Hybrid,
+            ..Default::default()
+        };
+        let task_ranked = with_ranking_signals(task, &ctx);
+        let summary_ranked = with_ranking_signals(summary, &ctx);
+        assert!(
+            task_ranked.score > summary_ranked.score,
+            "task {} should outrank summary {} in continuation mode",
+            task_ranked.score,
+            summary_ranked.score
+        );
+    }
+
+    // ── Governance scoring tests ──────────────────────────────────
+
+    #[test]
+    fn pinned_claim_boosted() {
+        let mut hit = make_hit(MemoryType::Fact, "critical invariant");
+        hit.governance_state = Some("pinned".to_string());
+        let ranked = with_ranking_signals(hit.clone(), &default_context());
+
+        hit.governance_state = Some("active".to_string());
+        let baseline = with_ranking_signals(hit, &default_context());
+
+        assert!(
+            ranked.score > baseline.score,
+            "pinned {} should outscore active {}",
+            ranked.score,
+            baseline.score
+        );
+    }
+
+    #[test]
+    fn archived_claim_penalized() {
+        let mut hit = make_hit(MemoryType::Decision, "archived decision");
+        hit.governance_state = Some("archived".to_string());
+        let ranked = with_ranking_signals(hit.clone(), &default_context());
+
+        hit.governance_state = None; // active default
+        let baseline = with_ranking_signals(hit, &default_context());
+
+        assert!(
+            ranked.score < baseline.score,
+            "archived {} should score lower than active {}",
+            ranked.score,
+            baseline.score
+        );
+    }
+
+    #[test]
+    fn rejected_claim_heavily_penalized() {
+        let mut hit = make_hit(MemoryType::Fact, "rejected fact");
+        hit.governance_state = Some("rejected".to_string());
+        let ranked = with_ranking_signals(hit.clone(), &default_context());
+
+        let mut active = make_hit(MemoryType::Fact, "rejected fact");
+        active.governance_state = Some("archived".to_string());
+        let archived = with_ranking_signals(active, &default_context());
+
+        assert!(
+            ranked.score < archived.score,
+            "rejected {} should score lower than archived {}",
+            ranked.score,
+            archived.score
+        );
+    }
+
+    // ── Combined continuation + governance ────────────────────────
+
+    #[test]
+    fn pinned_task_in_continuation_gets_double_boost() {
+        let mut task = make_hit(MemoryType::Task, "high priority migration");
+        task.governance_state = Some("pinned".to_string());
+        let ctx = RankingContext {
+            is_continuation: true,
+            retrieval_intent: RetrievalIntent::Hybrid,
+            ..Default::default()
+        };
+        let boosted = with_ranking_signals(task, &ctx);
+
+        let mut plain = make_hit(MemoryType::Task, "high priority migration");
+        plain.governance_state = None;
+        let ctx_off = RankingContext {
+            is_continuation: false,
+            retrieval_intent: RetrievalIntent::Hybrid,
+            ..Default::default()
+        };
+        let baseline = with_ranking_signals(plain, &ctx_off);
+
+        let delta = boosted.score - baseline.score;
+        assert!(
+            delta > 0.40,
+            "pinned + continuation should give >=0.40 combined boost, got {delta}"
+        );
+    }
+
+    // ── Type-fit scoring (v2.2.2, regression guard) ───────────────
+
+    #[test]
+    fn type_fit_boosts_matching_type() {
+        let decision = make_hit(MemoryType::Decision, "use postgres");
+        let ctx = RankingContext {
+            requested_types: vec!["decision".to_string()],
+            retrieval_intent: RetrievalIntent::Hybrid,
+            ..Default::default()
+        };
+        let ranked = with_ranking_signals(decision.clone(), &ctx);
+        let baseline = with_ranking_signals(decision, &default_context());
+        assert!(
+            ranked.score > baseline.score,
+            "type-fit should boost matching: {} vs {}",
+            ranked.score,
+            baseline.score
+        );
+    }
+
+    #[test]
+    fn type_fit_penalizes_non_matching_type() {
+        let summary = make_hit(MemoryType::Summary, "session recap");
+        let ctx = RankingContext {
+            requested_types: vec!["decision".to_string()],
+            retrieval_intent: RetrievalIntent::Hybrid,
+            ..Default::default()
+        };
+        let ranked = with_ranking_signals(summary.clone(), &ctx);
+        let baseline = with_ranking_signals(summary, &default_context());
+        assert!(
+            ranked.score < baseline.score,
+            "type-fit should penalize non-matching: {} vs {}",
+            ranked.score,
+            baseline.score
+        );
+    }
+
+    // ── Contradiction penalty (v2.2, regression guard) ────────────
+
+    #[test]
+    fn conflict_penalty_reduces_score() {
+        let mut hit = make_hit(MemoryType::Fact, "disputed fact");
+        hit.active_conflict_count = 3;
+        let conflicted = with_ranking_signals(hit, &default_context());
+
+        let clean = make_hit(MemoryType::Fact, "disputed fact");
+        let baseline = with_ranking_signals(clean, &default_context());
+
+        assert!(
+            conflicted.score < baseline.score,
+            "conflicted {} should score lower than clean {}",
+            conflicted.score,
+            baseline.score
+        );
+    }
+
+    // ── Supersession penalty ──────────────────────────────────────
+
+    #[test]
+    fn superseded_claim_penalized_in_ranking() {
+        let mut hit = make_hit(MemoryType::Decision, "old approach");
+        hit.superseded_at = Some(now_rfc3339());
+        let superseded = with_ranking_signals(hit, &default_context());
+
+        let fresh = make_hit(MemoryType::Decision, "old approach");
+        let baseline = with_ranking_signals(fresh, &default_context());
+
+        assert!(
+            superseded.score < baseline.score,
+            "superseded {} should rank below current {}",
+            superseded.score,
+            baseline.score
+        );
+    }
+
+    // ── Diversification ───────────────────────────────────────────
+
+    #[test]
+    fn diversify_deduplicates_same_title() {
+        let hit1 = make_hit(MemoryType::Decision, "use postgres 16");
+        let mut hit2 = make_hit(MemoryType::Decision, "use postgres 16");
+        hit2.id = Uuid::from_u128(42);
+        let results = diversify_ranked_results(vec![hit1, hit2]);
+        assert_eq!(results.len(), 1, "duplicate titles should be deduplicated");
+    }
 }

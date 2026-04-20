@@ -62,7 +62,6 @@ if [[ -f "$CHUM_MEM_FILE" ]]; then
   RESOLVED_PROJECT_ID=$(jq -r '.projectId // ""' "$CHUM_MEM_FILE" 2>/dev/null || echo "")
 fi
 if [[ -z "${RESOLVED_PROJECT_ID:-}" || "$RESOLVED_PROJECT_ID" == "null" ]]; then
-  # Auto-register project via API
   REPO_URL=$(git -C "$PROJECT_DIR" config --get remote.origin.url 2>/dev/null || echo "")
   if [[ "$REPO_URL" =~ ^git@([^:]+):(.+)$ ]]; then
     REPO_URL="https://${BASH_REMATCH[1]}/${BASH_REMATCH[2]}"
@@ -106,8 +105,6 @@ emit_claude() {
 }
 
 emit_codex() {
-  # Codex reads `systemMessage` from stdout JSON. Keep it short so it isn't
-  # injected verbatim into every turn.
   local message="$1"
   printf '{"systemMessage":"%s"}\n' "$message"
 }
@@ -116,8 +113,6 @@ USER_PROMPT_MSG="ChumMemory graph is fresh (PCKC v2.2.3). For any code-navigatio
 SESSION_START_BASE="ChumMemory plugin active (PCKC v2.2.3, MCP server: chum-memory). Multi-project mode: each project folder has its own project ID (auto-resolved via .chum-mem). Repository layer (knowledge_query, knowledge_report, knowledge_communities) is STRICTLY per-project — projectId is required, no global fallback. Session layer knowledge queries fall back to global project if no project-specific snapshot exists. mem_search falls back to global project for historical memories. The hook auto-runs repository_sync before every turn — do NOT call project_import or repository_sync manually. On every code-related prompt: knowledge_query(search, layer:repository) + mem_search in parallel first; Grep/Glob is the fallback only. Two layers: repository (code structure, AST) and session (interaction history). Always pass layer. Three-way hybrid search (lexical + pgvector + Chroma). Typed partitions for per-type precision. Hierarchical communities (level-0 + level-1). Governance: use claim_govern to pin/archive/reject claims. Load the ChumMemory skill for the full cookbook and decision tree."
 
 # ── Fetch knowledge report on session start for codebase context ──
-# Returns a JSON-safe string (newlines escaped) suitable for embedding in
-# the additionalContext field. Empty string on failure.
 fetch_knowledge_report_escaped() {
   local api_url="${CHUM_MEMORY_API_URL:-http://localhost:63001}"
   local qs="layer=repository"
@@ -137,7 +132,6 @@ case "$HOOK_EVENT" in
     fi
     ;;
   SessionStart)
-    # Fetch repository knowledge report to prime the session
     KB_REPORT=$(fetch_knowledge_report_escaped 2>/dev/null || echo "")
     if [[ -n "$KB_REPORT" ]]; then
       SESSION_START_MSG="${SESSION_START_BASE}\\n\\n--- Repository Knowledge Report ---\\n${KB_REPORT}"

@@ -19,7 +19,8 @@ use chum_mem_contracts::{
     BatchAppendSessionEventsRequest, BatchAppendSessionEventsResponse, BulkIndexResponse,
     ClaimRelation,
     ClaimRelationType, ContextBuildRequest, ContextBuildResponse, ContextItem, ContextSourceClass,
-    EndSessionRequest, EndSessionResponse, GetMemoryResponse, KnowledgeQueryKind,
+    EndSessionRequest, EndSessionResponse, GetMemoryResponse, GovernClaimRequest,
+    GovernClaimResponse, GovernanceState, KnowledgeQueryKind,
     KnowledgeQueryRequest, MemoryBatchRequest, MemorySearchRequest, MemoryType,
     ProjectImportGraphSummary, ProofHandle, ProofType, Provider, RepositorySyncRequest,
     RepositorySyncResponse, RepositorySyncStats, RetrievalIntent, StartSessionRequest,
@@ -76,6 +77,7 @@ const API_ROUTES: &[&str] = &[
     "GET /api/memory/:id",
     "POST /api/memory/batch",
     "POST /api/context/build",
+    "POST /v1/projects/resolve",
     "POST /v1/ingest/session/start",
     "POST /v1/ingest/session/event",
     "POST /v1/ingest/session/events",
@@ -90,6 +92,7 @@ const API_ROUTES: &[&str] = &[
 
 const SEARCH_PROVENANCE_LIMIT_DEFAULT: i64 = 2;
 const CONTEXT_BUILD_SEARCH_LIMIT: u32 = 12;
+const GLOBAL_PROJECT_SLUG: &str = "global";
 
 /// Cached community data extracted from the session knowledge graph.
 /// Scoped by project_id to prevent cross-project contamination.
@@ -221,6 +224,9 @@ struct KnowledgeReportResponse {
     project_id: Option<Uuid>,
     generated_at: String,
     report_markdown: String,
+    /// v2.2.3: Structured cross-layer summary for unified reports.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    cross_layer_summary: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -245,6 +251,7 @@ struct GraphCommunity {
 struct SnapshotArtifacts {
     report_markdown: Option<String>,
     node_link_json: Option<String>,
+    computed_at: Option<String>,
 }
 
 async fn health(State(state): State<ApiState>) -> Json<HealthResponse> {
@@ -443,6 +450,18 @@ async fn memory_get(
     Ok((StatusCode::OK, Json(response)).into_response())
 }
 
+/// v2.2.3: Governance transition endpoint.
+async fn claim_govern(
+    State(state): State<ApiState>,
+    Path(claim_id): Path<Uuid>,
+    Json(input): Json<GovernClaimRequest>,
+) -> Result<Response, ApiError> {
+    let response = perform_claim_govern(&state, claim_id, input)
+        .await
+        .map_err(map_domain_error)?;
+    Ok((StatusCode::OK, Json(response)).into_response())
+}
+
 async fn dashboard_summary(State(state): State<ApiState>) -> Result<Response, ApiError> {
     let response = perform_dashboard_summary(&state)
         .await
@@ -477,6 +496,24 @@ async fn knowledge_report(
     let response = perform_knowledge_report(&state, query.project_id, query.layer.as_deref())
         .await
         .map_err(map_domain_error)?;
+
+    // v2.2.3: For unified reports, return JSON with structured cross-layer
+    // summary so the benchmark (and clients) can inspect fields directly.
+    if query.layer.as_deref() == Some("unified") {
+        return Ok((
+            StatusCode::OK,
+            Json(json!({
+                "report": {
+                    "crossLayerSummary": response.cross_layer_summary,
+                    "repository": !response.report_markdown.is_empty(),
+                    "session": !response.report_markdown.is_empty(),
+                    "markdown": response.report_markdown,
+                },
+            })),
+        )
+            .into_response());
+    }
+
     Ok((
         StatusCode::OK,
         [(CONTENT_TYPE, "text/markdown; charset=utf-8")],
@@ -516,6 +553,7 @@ fn mcp_tool_definitions() -> Vec<Value> {
         json!({"name":"knowledge_communities","description":"List detected graph communities and cohesion scores","inputSchema":{"type":"object","properties":{"projectId":{"type":"string","format":"uuid"},"layer":{"type":"string","enum":["repository","session"],"description":"Graph layer to query."}}}}),
         json!({"name":"memory_get_batch","description":"Fetch multiple memory records by ID after mem_search filtering","inputSchema":{"type":"object","properties":{"ids":{"type":"array","items":{"type":"string","format":"uuid"},"minItems":1,"maxItems":20}},"required":["ids"]}}),
         json!({"name":"memory_get","description":"Fetch a single memory and its related links","inputSchema":{"type":"object","properties":{"id":{"type":"string","format":"uuid"}},"required":["id"]}}),
+        json!({"name":"claim_govern","description":"Transition a claim's governance state (pin, archive, reject, or reactivate)","inputSchema":{"type":"object","properties":{"claimId":{"type":"string","format":"uuid"},"newState":{"type":"string","enum":["active","pinned","archived","rejected"]},"reason":{"type":"string"}},"required":["claimId","newState"]}}),
     ]
 }
 
@@ -698,6 +736,21 @@ async fn handle_mcp_call(state: &ApiState, method: &str, params: &Value) -> Resu
                 .await
                 .map_err(|e| format!("{e:?}"))?;
             Ok(json!({"content":[{"type":"text","text":"SUCCESSFUL"}],"structuredContent":result}))
+        }
+        "claim_govern" => {
+            let claim_id: Uuid = args
+                .get("claimId")
+                .and_then(|v| v.as_str())
+                .ok_or("claimId is required")?
+                .parse()
+                .map_err(|_| "invalid claimId UUID")?;
+            let input: GovernClaimRequest =
+                serde_json::from_value(json!({"newState": args.get("newState"), "reason": args.get("reason")}))
+                    .map_err(|e| e.to_string())?;
+            let result = perform_claim_govern(state, claim_id, input)
+                .await
+                .map_err(|e| format!("{e:?}"))?;
+            Ok(json!({"content":[{"type":"text","text":format!("Claim {} transitioned from {} to {}", result.claim_id, serde_json::to_value(&result.previous_state).unwrap_or_default(), serde_json::to_value(&result.new_state).unwrap_or_default())}],"structuredContent":result}))
         }
         _ => Err(format!("unknown tool: {tool_name}")),
     }
@@ -915,6 +968,8 @@ fn router(state: ApiState) -> Router {
         .route("/api/memory/{id}", get(memory_get))
         .route("/api/memory/batch", post(memory_batch))
         .route("/api/context/build", post(context_build))
+        .route("/api/claims/{id}/govern", post(claim_govern))
+        .route("/v1/projects/resolve", post(project_resolve))
         .route("/v1/ingest/session/start", post(session_start))
         .route("/v1/ingest/session/event", post(session_event))
         .route("/v1/ingest/session/events", post(session_events_batch))
@@ -974,6 +1029,150 @@ async fn main() -> anyhow::Result<()> {
         .context("running API server")?;
 
     Ok(())
+}
+
+// ── Project resolve endpoint ────────────────────────────────────────────────
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ProjectResolveRequest {
+    repo_url: Option<String>,
+    name: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ProjectResolveResponse {
+    project_id: Uuid,
+    name: String,
+    created: bool,
+}
+
+async fn project_resolve(
+    State(state): State<ApiState>,
+    Json(input): Json<ProjectResolveRequest>,
+) -> Result<Json<ProjectResolveResponse>, ApiError> {
+    let response = perform_project_resolve(&state, input)
+        .await
+        .map_err(map_domain_error)?;
+    Ok(Json(response))
+}
+
+async fn perform_project_resolve(
+    state: &ApiState,
+    input: ProjectResolveRequest,
+) -> Result<ProjectResolveResponse, DomainError> {
+    let name = input.name.unwrap_or_else(|| {
+        input
+            .repo_url
+            .as_deref()
+            .and_then(|u| u.rsplit('/').next())
+            .map(|s| s.trim_end_matches(".git").to_string())
+            .unwrap_or_else(|| "unnamed-project".to_string())
+    });
+
+    let mut tx = begin_tx(state, &state.scope).await?;
+    ensure_scope_entities(&mut tx, &state.scope).await?;
+
+    // Try to find existing project by repo_url first, then by name.
+    // Exclude the global fallback project (slug = 'global') so it never
+    // hijacks per-project resolution.
+    let existing = if let Some(ref url) = input.repo_url {
+        let by_url = sqlx::query(
+            r#"
+            select id, name from public.projects
+            where organization_id = $1 and team_id = $2 and repo_url = $3
+              and slug != 'global'
+            limit 1
+            "#,
+        )
+        .bind(state.scope.organization_id)
+        .bind(state.scope.team_id)
+        .bind(url)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(DbError::from)?;
+        if by_url.is_some() {
+            by_url
+        } else {
+            sqlx::query(
+                r#"
+                select id, name from public.projects
+                where organization_id = $1 and team_id = $2 and name = $3
+                  and slug != 'global'
+                limit 1
+                "#,
+            )
+            .bind(state.scope.organization_id)
+            .bind(state.scope.team_id)
+            .bind(&name)
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(DbError::from)?
+        }
+    } else {
+        sqlx::query(
+            r#"
+            select id, name from public.projects
+            where organization_id = $1 and team_id = $2 and name = $3
+              and slug != 'global'
+            limit 1
+            "#,
+        )
+        .bind(state.scope.organization_id)
+        .bind(state.scope.team_id)
+        .bind(&name)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(DbError::from)?
+    };
+
+    if let Some(row) = existing {
+        let project_id: Uuid = row.try_get("id").map_err(DbError::from)?;
+        let project_name: String = row.try_get("name").map_err(DbError::from)?;
+        // Backfill repo_url if the existing project doesn't have one
+        if let Some(ref url) = input.repo_url {
+            sqlx::query(
+                "UPDATE public.projects SET repo_url = $1 WHERE id = $2 AND repo_url IS NULL",
+            )
+            .bind(url)
+            .bind(project_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(DbError::from)?;
+        }
+        commit_tx(tx).await?;
+        return Ok(ProjectResolveResponse {
+            project_id,
+            name: project_name,
+            created: false,
+        });
+    }
+
+    let project_id = Uuid::new_v4();
+    let slug = format!("project-{}", &project_id.simple().to_string()[..12]);
+    sqlx::query(
+        r#"
+        insert into public.projects (id, organization_id, team_id, name, slug, repo_url)
+        values ($1, $2, $3, $4, $5, $6)
+        "#,
+    )
+    .bind(project_id)
+    .bind(state.scope.organization_id)
+    .bind(state.scope.team_id)
+    .bind(&name)
+    .bind(&slug)
+    .bind(input.repo_url.as_deref())
+    .execute(&mut *tx)
+    .await
+    .map_err(DbError::from)?;
+
+    commit_tx(tx).await?;
+    Ok(ProjectResolveResponse {
+        project_id,
+        name,
+        created: true,
+    })
 }
 
 async fn perform_session_start(
@@ -1339,6 +1538,8 @@ async fn perform_search(
     ranking_context.branch = input.branch.clone();
     ranking_context.retrieval_intent = input.retrieval_intent.unwrap_or_default();
     ranking_context.query_text = Some(input.query.clone());
+    // v2.2.3: Continuation retrieval mode
+    ranking_context.is_continuation = is_continuation_query(&input.query);
     // v2.2.2: Pass requested types for type-fit scoring
     ranking_context.requested_types = input
         .types
@@ -1484,6 +1685,23 @@ async fn perform_search(
         })
         .collect();
     commit_tx(tx).await?;
+
+    // Global project fallback: if project-specific query returned no results
+    // and we queried a specific project, retry against the "global" project.
+    if ranked.is_empty() && input.project_id.is_some() {
+        let mut fallback_tx = begin_tx(state, &state.scope).await?;
+        if let Some(global_pid) =
+            resolve_global_project_id(&mut fallback_tx, &state.scope).await
+        {
+            if input.project_id != Some(global_pid) {
+                let mut fallback_input = input.clone();
+                fallback_input.project_id = Some(global_pid);
+                commit_tx(fallback_tx).await?;
+                return Box::pin(perform_search(state, fallback_input)).await;
+            }
+        }
+        commit_tx(fallback_tx).await?;
+    }
 
     Ok(MemorySearchEnvelope {
         disclosure: progressive_disclosure(&ranked, input.disclosure_level),
@@ -1675,7 +1893,7 @@ async fn perform_context_memory_searches(
         cursor: None,
     });
 
-    for scoped_types in type_scopes {
+    for (scoped_types, scope_limit) in type_scopes {
         let scoped_query = context_memory_query_for_scope(&objective, &scoped_types);
         requests.push(MemorySearchRequest {
             query: scoped_query,
@@ -1692,7 +1910,7 @@ async fn perform_context_memory_searches(
             disclosure_level: chum_mem_contracts::DisclosureLevel::Overview,
             retrieval_intent: Some(retrieval_intent),
             include_historical: input.include_historical,
-            limit: 4,
+            limit: scope_limit,
             cursor: None,
         });
     }
@@ -1734,6 +1952,68 @@ async fn perform_context_memory_searches(
     });
     hits.truncate(CONTEXT_BUILD_SEARCH_LIMIT as usize);
     Ok(hits)
+}
+
+/// v2.2.3: Governance transition — pin / archive / reject / reactivate claims.
+/// Accepts either a claim ID or a memory ID (1:1 via unique constraint).
+async fn perform_claim_govern(
+    state: &ApiState,
+    id: Uuid,
+    input: GovernClaimRequest,
+) -> Result<GovernClaimResponse, DomainError> {
+    let mut tx = begin_tx(state, &state.scope).await?;
+
+    let row = sqlx::query_as::<_, (Uuid, String)>(
+        "SELECT id, governance_state FROM public.claims WHERE id = $1 OR memory_id = $1",
+    )
+    .bind(id)
+    .fetch_optional(tx.as_mut())
+    .await
+    .map_err(|e| DomainError::Internal(e.to_string()))?
+    .ok_or_else(|| DomainError::NotFound(format!("Claim {id} not found")))?;
+
+    let claim_id = row.0;
+    let previous_state: GovernanceState = row.1.parse().unwrap_or_default();
+    let new_state = input.new_state;
+
+    sqlx::query(
+        "UPDATE public.claims SET governance_state = $1, updated_at = now() WHERE id = $2",
+    )
+    .bind(new_state.as_str())
+    .bind(claim_id)
+    .execute(tx.as_mut())
+    .await
+    .map_err(|e| DomainError::Internal(e.to_string()))?;
+
+    let transition_id = Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO public.claim_governance_history \
+         (id, organization_id, team_id, project_id, claim_id, previous_state, new_state, reason, actor_type) \
+         SELECT $1, organization_id, team_id, project_id, $2, $3, $4, $5, $6 \
+         FROM public.claims WHERE id = $2",
+    )
+    .bind(transition_id)
+    .bind(claim_id)
+    .bind(previous_state.as_str())
+    .bind(new_state.as_str())
+    .bind(input.reason.as_deref())
+    .bind(match state.scope.actor_type {
+        chum_mem_contracts::ActorType::User => "user",
+        chum_mem_contracts::ActorType::Token => "token",
+        chum_mem_contracts::ActorType::System => "system",
+    })
+    .execute(tx.as_mut())
+    .await
+    .map_err(|e| DomainError::Internal(e.to_string()))?;
+
+    commit_tx(tx).await?;
+
+    Ok(GovernClaimResponse {
+        claim_id,
+        previous_state,
+        new_state,
+        transition_id,
+    })
 }
 
 async fn perform_memory_get(
@@ -1891,18 +2171,35 @@ async fn perform_dashboard_graph(
     // When the caller specifies a layer, return only that layer's snapshot.
     // When no layer is specified (e.g. the MCP graph_snapshot tool), merge
     // both layers so callers without layer awareness see the full graph.
+    let has_project = project_id.is_some();
     let (repo_snapshot, session_snapshot) = match layer {
         Some("repository") => (
-            load_latest_knowledge_graph_by_type(&mut tx, &context, Some("repository")).await?,
+            if has_project {
+                load_latest_knowledge_graph_by_type(&mut tx, &context, Some("repository")).await?
+            } else {
+                load_merged_snapshots_by_type(&mut tx, &context, "repository").await?
+            },
             None,
         ),
         Some("session") => (
             None,
-            load_latest_knowledge_graph_by_type(&mut tx, &context, Some("session")).await?,
+            if has_project {
+                load_latest_knowledge_graph_by_type(&mut tx, &context, Some("session")).await?
+            } else {
+                load_merged_snapshots_by_type(&mut tx, &context, "session").await?
+            },
         ),
         _ => (
-            load_latest_knowledge_graph_by_type(&mut tx, &context, Some("repository")).await?,
-            load_latest_knowledge_graph_by_type(&mut tx, &context, Some("session")).await?,
+            if has_project {
+                load_latest_knowledge_graph_by_type(&mut tx, &context, Some("repository")).await?
+            } else {
+                load_merged_snapshots_by_type(&mut tx, &context, "repository").await?
+            },
+            if has_project {
+                load_latest_knowledge_graph_by_type(&mut tx, &context, Some("session")).await?
+            } else {
+                load_merged_snapshots_by_type(&mut tx, &context, "session").await?
+            },
         ),
     };
     let response = match (repo_snapshot, session_snapshot) {
@@ -1969,7 +2266,13 @@ async fn perform_knowledge_report(
     project_id: Option<Uuid>,
     layer: Option<&str>,
 ) -> Result<KnowledgeReportResponse, DomainError> {
-    let context = scoped_context(&state.scope, project_id)?;
+    // Knowledge reports are always project-scoped — no global fallback.
+    let resolved_pid = project_id.or(state.scope.project_id).ok_or_else(|| {
+        DomainError::BadRequest(
+            "projectId is required for knowledge_report".to_string(),
+        )
+    })?;
+    let context = scoped_context(&state.scope, Some(resolved_pid))?;
     let mut tx = begin_tx(state, &context).await?;
 
     // v2.2.2: Support unified layer that merges repository + session reports
@@ -2011,21 +2314,37 @@ async fn perform_knowledge_report(
             project_id,
             generated_at,
             report_markdown: unified_markdown,
+            cross_layer_summary: Some(cross_layer),
         });
     }
 
+    // Fast path: return pre-computed artifact report (avoids deserializing the
+    // full JSONB graph snapshot which is ~200-400ms for large graphs).
+    let artifacts = load_latest_snapshot_artifacts_by_type(&mut tx, &context, layer).await?;
+    if let Some(ref arts) = artifacts {
+        if let Some(ref md) = arts.report_markdown {
+            if !md.is_empty() {
+                commit_tx(tx).await?;
+                return Ok(KnowledgeReportResponse {
+                    project_id,
+                    generated_at: arts.computed_at.clone().unwrap_or_default(),
+                    report_markdown: md.clone(),
+                    cross_layer_summary: None,
+                });
+            }
+        }
+    }
+
+    // Slow path: load full graph snapshot and regenerate report.
     let graph = load_latest_knowledge_graph_by_type(&mut tx, &context, layer)
         .await?
         .ok_or_else(|| DomainError::NotFound("No knowledge graph snapshot found".to_string()))?;
-    let artifacts = load_latest_snapshot_artifacts_by_type(&mut tx, &context, layer).await?;
     commit_tx(tx).await?;
-    // Always regenerate from the live graph to use the latest report format.
-    // Cached artifact reports may use an older template.
-    let _ = artifacts;
     Ok(KnowledgeReportResponse {
         project_id,
         generated_at: graph.generated_at.clone(),
         report_markdown: generate_knowledge_report(&graph),
+        cross_layer_summary: None,
     })
 }
 
@@ -2120,10 +2439,31 @@ async fn perform_knowledge_communities(
     project_id: Option<Uuid>,
     layer: Option<&str>,
 ) -> Result<KnowledgeCommunitiesResponse, DomainError> {
-    let context = scoped_context(&state.scope, project_id)?;
+    let is_repo = layer == Some("repository");
+    let resolved_pid = if is_repo {
+        Some(project_id.or(state.scope.project_id).ok_or_else(|| {
+            DomainError::BadRequest(
+                "projectId is required for repository-layer community queries".to_string(),
+            )
+        })?)
+    } else {
+        project_id.or(state.scope.project_id)
+    };
+    let context = scoped_context(&state.scope, resolved_pid)?;
     let mut tx = begin_tx(state, &context).await?;
-    let graph = load_latest_knowledge_graph_by_type(&mut tx, &context, layer)
-        .await?
+    let mut graph = load_latest_knowledge_graph_by_type(&mut tx, &context, layer).await?;
+
+    // Session layer: fall back to global project if project-scoped query found nothing
+    if graph.is_none() && !is_repo && resolved_pid.is_some() {
+        if let Some(global_pid) = resolve_global_project_id(&mut tx, &state.scope).await {
+            if resolved_pid != Some(global_pid) {
+                let global_ctx = scoped_context(&state.scope, Some(global_pid))?;
+                graph = load_latest_knowledge_graph_by_type(&mut tx, &global_ctx, layer).await?;
+            }
+        }
+    }
+
+    let graph = graph
         .ok_or_else(|| DomainError::NotFound("No knowledge graph snapshot found".to_string()))?;
     commit_tx(tx).await?;
     Ok(KnowledgeCommunitiesResponse {
@@ -2147,12 +2487,34 @@ async fn perform_knowledge_query(
     input: KnowledgeQueryRequest,
     layer: Option<&str>,
 ) -> Result<GraphQueryResponse, DomainError> {
-    let context = scoped_context(&state.scope, input.project_id)?;
+    let is_repo = layer == Some("repository");
+    let resolved_pid = if is_repo {
+        Some(input.project_id.or(state.scope.project_id).ok_or_else(|| {
+            DomainError::BadRequest(
+                "projectId is required for repository-layer knowledge queries".to_string(),
+            )
+        })?)
+    } else {
+        input.project_id.or(state.scope.project_id)
+    };
+    let context = scoped_context(&state.scope, resolved_pid)?;
     let mut tx = begin_tx(state, &context).await?;
-    let graph = load_latest_knowledge_graph_by_type(&mut tx, &context, layer)
-        .await?
-        .ok_or_else(|| DomainError::NotFound("No knowledge graph snapshot found".to_string()))?;
+    let mut graph = load_latest_knowledge_graph_by_type(&mut tx, &context, layer).await?;
+
+    // Session layer: fall back to global project if project-scoped query found nothing
+    if graph.is_none() && !is_repo && resolved_pid.is_some() {
+        if let Some(global_pid) = resolve_global_project_id(&mut tx, &state.scope).await {
+            if resolved_pid != Some(global_pid) {
+                let global_ctx = scoped_context(&state.scope, Some(global_pid))?;
+                graph = load_latest_knowledge_graph_by_type(&mut tx, &global_ctx, layer).await?;
+            }
+        }
+    }
+
     commit_tx(tx).await?;
+
+    let graph = graph
+        .ok_or_else(|| DomainError::NotFound("No knowledge graph snapshot found".to_string()))?;
     Ok(run_knowledge_query(
         &graph,
         knowledge_query_kind_str(input.query),
@@ -2709,7 +3071,8 @@ async fn semantic_search(
           c.valid_from as claim_valid_from,
           c.valid_to as claim_valid_to,
           c.superseded_by as claim_superseded_by,
-          coalesce(c.active_conflict_count, 0)::bigint as active_conflict_count
+          coalesce(c.active_conflict_count, 0)::bigint as active_conflict_count,
+          c.governance_state as claim_governance_state
         from deduped d
         join public.memories m on m.id = d.memory_id
         left join public.sessions s on s.id = m.session_id
@@ -2728,6 +3091,7 @@ async fn semantic_search(
             cl.valid_to,
             cl.superseded_by,
             cl.admitted,
+            cl.governance_state,
             (
               select count(*)::bigint
               from public.claim_edges ce
@@ -2766,6 +3130,7 @@ async fn semantic_search(
               and c.superseded_by is null
               and c.valid_to is null
               and c.verification_status <> 'contradicted'
+              and coalesce(c.governance_state, 'active') not in ('archived', 'rejected')
             )
           )
         order by d.semantic_score desc, m.created_at desc
@@ -2825,6 +3190,7 @@ async fn semantic_search(
                 "validTo": row.claim_valid_to.map(format_time),
                 "supersededBy": row.claim_superseded_by,
                 "activeConflictCount": row.active_conflict_count,
+                "governanceState": row.claim_governance_state,
             })),
         })
         .collect())
@@ -2904,6 +3270,7 @@ fn map_ranked_memory(row: &MemorySearchRow, lexical: bool) -> RankedMemory {
         valid_to: row.claim_valid_to.map(format_time),
         superseded_by: row.claim_superseded_by,
         active_conflict_count: row.active_conflict_count,
+        governance_state: row.claim_governance_state.clone(),
     }
 }
 
@@ -2957,6 +3324,7 @@ fn map_memory_detail_to_ranked_memory(row: &chum_mem_db::MemoryDetailRow) -> Ran
         valid_to: row.claim_valid_to.map(format_time),
         superseded_by: row.claim_superseded_by,
         active_conflict_count: row.active_conflict_count,
+        governance_state: row.claim_governance_state.clone(),
     }
 }
 
@@ -3035,33 +3403,77 @@ fn infer_retrieval_intent(input: &ContextBuildRequest) -> RetrievalIntent {
     }
 }
 
-fn context_memory_type_scopes(objective: &str) -> Vec<Vec<MemoryType>> {
-    let objective = objective.to_lowercase();
-    let mut scopes = Vec::new();
+/// v2.2.3: Detect whether a query expresses continuation/resume intent.
+fn is_continuation_query(query: &str) -> bool {
+    let lower = query.to_lowercase();
+    [
+        "continue",
+        "continuation",
+        "resume",
+        "pick up where",
+        "where we left off",
+        "what were we",
+        "what was i",
+        "prior work",
+        "previous session",
+        "last session",
+        "open task",
+        "open loop",
+        "unfinished",
+        "follow up",
+        "what's next",
+        "what is next",
+        "next step",
+    ]
+    .iter()
+    .any(|signal| lower.contains(signal))
+}
 
+/// v2.2.3: Section-aware type scopes.
+///
+/// Always includes baseline queries for all core sections so that
+/// `context_build` / `context_compile_v2` can fill every typed section
+/// even when the objective text doesn't contain section-specific keywords.
+/// Keyword-matched sections get a higher per-scope limit (emphasis scopes).
+fn context_memory_type_scopes(objective: &str) -> Vec<(Vec<MemoryType>, u32)> {
+    let objective = objective.to_lowercase();
+
+    // Baseline: every core section gets a low-limit query (2 hits each).
+    // This ensures projectFacts, recentDecisions, knownBugs, openQuestions
+    // etc. are populated even for generic objectives.
+    let mut scopes: Vec<(Vec<MemoryType>, u32)> = vec![
+        (vec![MemoryType::Decision], 2),
+        (vec![MemoryType::Task], 2),
+        (vec![MemoryType::Fact], 2),
+        (vec![MemoryType::Constraint], 2),
+        (vec![MemoryType::Bug, MemoryType::Fix], 2),
+        (vec![MemoryType::OpenQuestion], 2),
+    ];
+
+    // Emphasis: keyword-matched sections get additional hits.
     if ["decision", "decide", "policy", "latest", "recent"]
         .iter()
         .any(|signal| objective.contains(signal))
     {
-        scopes.push(vec![MemoryType::Decision]);
+        scopes.push((vec![MemoryType::Decision], 4));
     }
     if ["constraint", "rule", "must", "guardrail"]
         .iter()
         .any(|signal| objective.contains(signal))
     {
-        scopes.push(vec![MemoryType::Constraint]);
+        scopes.push((vec![MemoryType::Constraint], 4));
     }
     if ["open question", "unknown", "unresolved", "question"]
         .iter()
         .any(|signal| objective.contains(signal))
     {
-        scopes.push(vec![MemoryType::OpenQuestion]);
+        scopes.push((vec![MemoryType::OpenQuestion], 4));
     }
     if ["bug", "issue", "failure", "drift", "broken"]
         .iter()
         .any(|signal| objective.contains(signal))
     {
-        scopes.push(vec![MemoryType::Bug, MemoryType::Fix]);
+        scopes.push((vec![MemoryType::Bug, MemoryType::Fix], 4));
     }
     if [
         "task",
@@ -3074,13 +3486,24 @@ fn context_memory_type_scopes(objective: &str) -> Vec<Vec<MemoryType>> {
     .iter()
     .any(|signal| objective.contains(signal))
     {
-        scopes.push(vec![MemoryType::Task]);
+        scopes.push((vec![MemoryType::Task], 4));
     }
     if ["verified", "fact", "truth", "result", "evidence"]
         .iter()
         .any(|signal| objective.contains(signal))
     {
-        scopes.push(vec![MemoryType::Fact, MemoryType::Fix]);
+        scopes.push((vec![MemoryType::Fact, MemoryType::Fix], 4));
+    }
+
+    // v2.2.3: Continuation emphasis — when the objective expresses
+    // resume/continue intent, boost the claim types that matter most
+    // for picking up where a prior session left off.
+    if is_continuation_query(&objective) {
+        scopes.push((vec![MemoryType::Task], 4));
+        scopes.push((vec![MemoryType::Decision], 4));
+        scopes.push((vec![MemoryType::OpenQuestion], 3));
+        scopes.push((vec![MemoryType::Constraint], 3));
+        scopes.push((vec![MemoryType::Fix], 3));
     }
 
     scopes
@@ -3094,6 +3517,7 @@ fn context_memory_query_for_scope(objective: &str, scoped_types: &[MemoryType]) 
         [MemoryType::Bug, MemoryType::Fix] => "verified fix bug state failure correction",
         [MemoryType::Task] => "active task unfinished follow up",
         [MemoryType::Fact, MemoryType::Fix] => "verified fact evidence result",
+        [MemoryType::Fact] => "verified project fact",
         _ => "verified memory",
     };
     format!("{hint} {objective}")
@@ -3649,6 +4073,45 @@ async fn load_latest_knowledge_graph_by_type(
         .map_err(|error| DomainError::Internal(error.to_string()))
 }
 
+async fn load_merged_snapshots_by_type(
+    tx: &mut Transaction<'_, Postgres>,
+    context: &RepositoryContext,
+    snapshot_type: &str,
+) -> Result<Option<KnowledgeGraph>, DomainError> {
+    let rows = sqlx::query(
+        r#"
+        select distinct on (project_id) snapshot
+        from public.knowledge_snapshots
+        where organization_id = $1
+          and team_id = $2
+          and snapshot_type = $3
+        order by project_id, created_at desc
+        "#,
+    )
+    .bind(context.organization_id)
+    .bind(context.team_id)
+    .bind(snapshot_type)
+    .fetch_all(&mut **tx)
+    .await
+    .map_err(DbError::from)?;
+
+    if rows.is_empty() {
+        return Ok(None);
+    }
+
+    let mut merged: Option<KnowledgeGraph> = None;
+    for row in rows {
+        let snapshot = row.try_get::<Value, _>("snapshot").map_err(DbError::from)?;
+        let graph: KnowledgeGraph = serde_json::from_value(snapshot)
+            .map_err(|error| DomainError::Internal(error.to_string()))?;
+        merged = Some(match merged {
+            Some(base) => merge_graphs(&base, &graph),
+            None => graph,
+        });
+    }
+    Ok(merged)
+}
+
 async fn load_latest_snapshot_artifacts_by_type(
     tx: &mut Transaction<'_, Postgres>,
     context: &RepositoryContext,
@@ -3656,7 +4119,8 @@ async fn load_latest_snapshot_artifacts_by_type(
 ) -> Result<Option<SnapshotArtifacts>, DomainError> {
     let row = sqlx::query(
         r#"
-        select a.report_markdown, a.node_link_json
+        select a.report_markdown, a.node_link_json,
+               to_char(a.computed_at, 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') as computed_at
         from public.knowledge_snapshot_heads h
         join public.knowledge_snapshot_artifacts a on a.snapshot_id = h.snapshot_id
         where h.organization_id = $1
@@ -3678,6 +4142,7 @@ async fn load_latest_snapshot_artifacts_by_type(
         Ok(SnapshotArtifacts {
             report_markdown: row.try_get("report_markdown").map_err(DbError::from)?,
             node_link_json: row.try_get("node_link_json").map_err(DbError::from)?,
+            computed_at: row.try_get("computed_at").map_err(DbError::from)?,
         })
     })
     .transpose()
@@ -3823,6 +4288,22 @@ fn knowledge_query_kind_str(kind: KnowledgeQueryKind) -> &'static str {
         KnowledgeQueryKind::Search => "search",
         KnowledgeQueryKind::GoalDirected => "goal_directed",
     }
+}
+
+async fn resolve_global_project_id(
+    tx: &mut Transaction<'_, Postgres>,
+    scope: &RepositoryContext,
+) -> Option<Uuid> {
+    sqlx::query_scalar::<_, Uuid>(
+        "SELECT id FROM public.projects WHERE organization_id = $1 AND team_id = $2 AND slug = $3 LIMIT 1",
+    )
+    .bind(scope.organization_id)
+    .bind(scope.team_id)
+    .bind(GLOBAL_PROJECT_SLUG)
+    .fetch_optional(&mut **tx)
+    .await
+    .ok()
+    .flatten()
 }
 
 fn scoped_context(

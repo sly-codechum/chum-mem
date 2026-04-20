@@ -1,9 +1,9 @@
 ---
 name: ChumMemory
-description: "Always-on knowledge graph and memory retrieval for code work. USE on every prompt that touches code — finding symbols, tracing imports, understanding architecture, recalling past decisions, debugging, refactoring. Replaces grep/glob for anything tree-sitter can parse. Two layers: repository (code structure) and session (interaction history). The plugin hook keeps the graph fresh before each turn — no manual import needed. PCKC v2.2.2 model: claims are the unit of memory, proof is the unit of trust, compiled minimal proof sets are the unit of context. Three-way hybrid search: lexical + pgvector ANN + Chroma ML. Graphify-style markdown reports."
+description: "Always-on knowledge graph and memory retrieval for code work. USE on every prompt that touches code — finding symbols, tracing imports, understanding architecture, recalling past decisions, debugging, refactoring. Replaces grep/glob for anything tree-sitter can parse. Two layers: repository (code structure) and session (interaction history). The plugin hook keeps the graph fresh before each turn — no manual import needed. PCKC v2.2.3 model: claims are the unit of memory, proof is the unit of trust, compiled minimal proof sets are the unit of context. Three-way hybrid search: lexical + pgvector ANN + Chroma ML. Graphify-style markdown reports."
 ---
 
-# ChumMemory (PCKC v2.2.2)
+# ChumMemory (PCKC v2.2.3)
 
 The plugin hook runs `sync.sh` on every `UserPromptSubmit`, so the repository graph is **already fresh** when your turn starts. Your job is to **query the graph instead of grepping**, then read the files the graph points to — and when you recall memory, **read proof, not prose**.
 
@@ -16,7 +16,7 @@ If you catch yourself about to Read or Grep without having queried first → sto
 
 ---
 
-## What PCKC v2.2.2 means for your turn
+## What PCKC v2.2.3 means for your turn
 
 The runtime uses a **Proof-Carrying Knowledge Compiler** with three-way hybrid search. Three units change:
 
@@ -26,15 +26,36 @@ The runtime uses a **Proof-Carrying Knowledge Compiler** with three-way hybrid s
 | Trust | "where did this come from" | **proof** (`authority_class`, `verification_status`, `proof_type`, `source_ref`, `excerpt`, `freshness`) |
 | Context | top-k similar text | **compiled minimal proof set** (smallest set of current-valid claims whose proof is sufficient to answer) |
 
-### v2.2.2 Architecture
+### v2.2.3 Architecture
 
+- **Multi-project scoping**: each project folder gets its own dynamically assigned project ID (stored in `.chum-mem`). Repository knowledge graphs and reports are strictly per-project. Memory search (`mem_search`) falls back to a "global" project when the current project has no memories yet, so historical decisions and facts remain accessible.
 - **Three-way hybrid search**: lexical (PostgreSQL FTS) + pgvector ANN + Chroma ML embeddings, merged and ranked together. Chroma is a primary source, not a fallback.
 - **Ranking weights**: semantic 30% + lexical 32% + session relevance 12% + graph proximity 10% + recency/importance/confidence 22%. Content match dominates.
 - **Typed embedding partitions**: `mem_search` with `types` routes to per-type Chroma collections (`memories_bug`, `memories_decision`, etc.) for higher precision.
 - **Hierarchical communities**: level-0 clusters + level-1 sub-communities via Leiden. Supports graphs up to 100K nodes / 200K edges.
-- **Graphify-style reports**: `knowledge_report` returns markdown with one-line extraction summary, god nodes, node/edge type distributions, and community hierarchy.
+- **Graphify-style reports**: `knowledge_report` returns markdown with one-line extraction summary, god nodes, node/edge type distributions, and community hierarchy. Reports are per-project — each project folder gets its own report from its synced code.
 - **Community cache**: 5-minute TTL, project-scoped. First query loads the session graph (~800ms), subsequent queries use cached community maps (<100ms).
 - **Soft type filter**: when `types` are requested, matching results are preferred. If no exact matches exist, unfiltered results are returned rather than empty.
+- **Deterministic governance**: claims have a `governanceState` field (active/pinned/archived/rejected). Pinned claims get a +0.20 ranking boost; archived (-0.50) and rejected (-0.80) are excluded from default search. Use `claim_govern` to transition states with an optional reason for audit.
+- **Continuation retrieval**: queries like "continue prior work" automatically boost unsuperseded actionable claims (task, decision, open_question) and penalize superseded ones. The ranker detects 17 continuation signal phrases.
+- **Session-start knowledge report**: the hook fetches `knowledge_report(layer:repository)` on `SessionStart` and injects a truncated codebase overview into the session context, so you start every conversation knowing the project shape.
+
+### Project scoping
+
+The system operates in **multi-project mode**. Each project folder is automatically registered on first use:
+
+1. The hook reads `.chum-mem` in the project root for the cached project ID
+2. If missing, it calls `POST /v1/projects/resolve` with the folder name and git remote URL
+3. The API finds an existing project by repo URL or name, or creates a new one with a fresh UUID
+4. The resolved project ID is cached in `.chum-mem` and exported as `CHUM_MEM_PROJECT_ID`
+
+**Scoping rules:**
+- **Repository layer** (`knowledge_query`, `knowledge_report`, `knowledge_communities`): **strictly per-project**. `projectId` is required — the API returns an error if omitted. Each project folder has its own knowledge graph built from its synced code. No cross-project fallback. The hook always passes the resolved project ID automatically.
+- **Session layer** (`knowledge_query`, `knowledge_communities`): per-project with **global fallback**. If a project-specific session graph query finds no snapshot, the API automatically retries against the "global" project.
+- **Memory search** (`mem_search`): per-project with **global fallback**. If a project-specific memory search returns no results, the system automatically retries against the "global" project (which holds all historical memories from before per-project scoping). This ensures past decisions and facts are always accessible.
+- **Sessions**: scoped to the project folder where they occur. The hook exports the project ID so `session_start` associates the session with the correct project.
+
+You never need to manage project IDs manually — the hook handles everything.
 
 Practical consequences for a turn:
 
@@ -60,6 +81,8 @@ Practical consequences for a turn:
 | Pull a specific past session | `mem_search(query, sessionId, disclosureLevel:"full")` |
 | Check if a belief has been superseded | `mem_search(query, mode:"hybrid", includeHistorical:true)` and read `superseded_by` / `valid_to` |
 | Build a token-budgeted context pack | `context_build(provider, objective, maxTokenBudget)` |
+| Pin / archive / reject a claim | `claim_govern(claimId, newState, reason?)` — accepts memory ID or claim ID |
+| Continue prior work | `mem_search(query:"continue prior work", mode:"hybrid")` — continuation boost auto-applied |
 | **Edit a file** | `knowledge_query(neighbors, nodeId:"file:<path>")` first, *then* Edit |
 
 ---
@@ -102,6 +125,16 @@ PARALLEL:
 knowledge_query(query:"hub_nodes", layer:"repository")
 ```
 
+**"Pin this decision so it always surfaces"** (governance mode)
+```
+claim_govern(claimId:"<memory-or-claim-id>", newState:"pinned", reason:"Critical architectural decision — must surface on related queries")
+```
+
+**"This claim is wrong, remove it from search"**
+```
+claim_govern(claimId:"<memory-or-claim-id>", newState:"rejected", reason:"Hallucinated by model — contradicted by test results")
+```
+
 **"I'm about to refactor `client.ts` — what depends on it?"**
 ```
 knowledge_query(query:"neighbors", nodeId:"file:packages/db/src/client.ts", layer:"repository", depth:3)
@@ -126,6 +159,7 @@ Every `mem_search` hit carries structured trust signals. **Read them, don't skip
 - `proofHandles[]` — each entry is `{proofType, sourceRef, excerpt, authorityClass, verificationStatus}`. For any **answer-critical** claim, open at least one proof handle (via `memory_get` or by reading the `sourceRef` file) and quote the excerpt.
 - `provenance[]` — lineage, not proof. Use it for tracing, not for authority.
 - `validFrom` / `valid_to` / `superseded_by` — temporal validity. A claim past `valid_to` or with a `superseded_by` target is **stale by default**.
+- `governanceState` — `active | pinned | archived | rejected`. Pinned claims are operator-prioritized; archived/rejected are excluded from default search. Respect governance intent — don't fight a pinned claim's prominence or resurrect a rejected one.
 
 Rule of thumb: if a hit has `activeConflictCount > 0`, or `verificationStatus != verified`, or a non-empty `supersededPenalty` — **caveat or refuse**, never silently cite.
 
@@ -198,6 +232,12 @@ The host hook (Claude Code or Codex) calls `session_start` → `session_event_ap
 - `memory_get_batch(ids* [1–20])` — **always prefer over loops**
 - `context_build(provider*, objective*, maxTokenBudget*≤64000, filePaths, repoUrl, branch)` — compiles a minimal proof set for the objective
 
+**Governance**
+- `claim_govern(claimId*, newState*, reason?)` — transition a claim's governance state. Accepts memory ID or claim ID.
+  - `newState`: `active` (reactivate) | `pinned` (boost +0.20, always surface) | `archived` (hide from search, preserve history) | `rejected` (hide from search, mark as incorrect)
+  - Writes an audit row to `claim_governance_history` with actor, previous state, and reason
+  - Pinned claims float to the top of relevant queries; archived/rejected are excluded from default search SQL
+
 **Knowledge graph**
 - `knowledge_query(query*={hub_nodes|shortest_path|neighbors|communities|search|goal_directed}, layer*={repository|session}, nodeId, targetNodeId, text, depth=1..5)`
 - `knowledge_report(layer*, projectId)` — returns **graphify-style markdown** (not JSON): summary, extraction %, node/edge types, god nodes, communities
@@ -244,5 +284,7 @@ Note: first query after API restart or 5-minute cache expiry takes ~800ms (sessi
 
 - The server resolves tenant / org / team scope from the auth token. Never pass these.
 - `repository` and `session` layers are isolated — no cross-contamination at query time.
+- Project IDs are resolved automatically by the hook — never hardcode or guess project UUIDs.
+- Multi-project mode: the server runs without a fixed project scope. Each request carries its project ID; the API validates it belongs to the same org/team.
 - Token-scoped machine auth is enforced server-side; client cannot escalate.
 - The belief gate is enforced server-side on `session_end` derivation; do not try to inject durable beliefs through `session_event_append` payloads.

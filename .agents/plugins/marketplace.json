@@ -1,14 +1,14 @@
 {
-  "name": "personal",
+  "name": "CodeChum Plugins",
   "interface": {
     "displayName": "CodeChum Plugins"
   },
   "plugins": [
     {
-      "name": "chum-memory",
+      "name": "chum-mem",
       "source": {
         "source": "local",
-        "path": "./plugins/chum-memory"
+        "path": "./plugins/chum-memory-codex"
       },
       "policy": {
         "installation": "AVAILABLE",

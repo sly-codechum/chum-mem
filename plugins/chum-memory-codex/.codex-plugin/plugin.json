@@ -1,14 +1,13 @@
 {
-  "name": "chum-memory",
-  "version": "0.1.1",
+  "name": "chum-mem",
+  "version": "0.2.0",
   "description": "Persistent memory workflows for Codex, Claude, and Gemini backed by chum-memory-project MCP.",
   "author": {
-    "name": "CodeChum",
-    "email": "support@codechum.com",
-    "url": "https://github.com/CodeChum"
+    "name": "Sly Bacalso",
+    "email": "sly@codechum.com"
   },
-  "homepage": "https://github.com/CodeChum/chum-memory-project",
-  "repository": "https://github.com/CodeChum/chum-memory-project",
+  "homepage": "https://github.com/sly-codechum/chum-mem",
+  "repository": "https://github.com/sly-codechum/chum-mem",
   "license": "MIT",
   "keywords": [
     "memory",
@@ -22,19 +21,19 @@
   "hooks": "./hooks/hooks.json",
   "mcpServers": "./.mcp.json",
   "interface": {
-    "displayName": "ChumMemory",
+    "displayName": "ChumMem",
     "shortDescription": "Persistent memory MCP for coding agents",
     "longDescription": "Use Chum Memory to ingest and retrieve coding-session memory with tenant-safe hybrid retrieval from the chum-memory-project stack.",
-    "developerName": "CodeChum",
+    "developerName": "Sly Bacalso",
     "category": "Coding",
     "capabilities": [
       "Interactive",
       "Read",
       "Write"
     ],
-    "websiteURL": "https://github.com/CodeChum/chum-memory-project",
-    "privacyPolicyURL": "https://github.com/CodeChum/chum-memory-project",
-    "termsOfServiceURL": "https://github.com/CodeChum/chum-memory-project",
+    "websiteURL": "https://github.com/sly-codechum/chum-mem",
+    "privacyPolicyURL": "https://github.com/sly-codechum/chum-mem",
+    "termsOfServiceURL": "https://github.com/sly-codechum/chum-mem",
     "defaultPrompt": [
       "Search relevant memory before implementing this task and return only top matches.",
       "Ingest this session and preserve command outputs as searchable context.",

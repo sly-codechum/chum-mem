@@ -110,6 +110,16 @@ app.get('/api/memory/:id', async (req, res) => {
   res.status(response.status).type(response.headers.get('content-type') ?? 'application/json').send(await response.text());
 });
 
+// claims/:id/govern — governance state transition
+app.post('/api/claims/:id/govern', async (req, res) => {
+  const response = await proxyJson(`/api/claims/${encodeURIComponent(req.params['id']!)}/govern`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(req.body),
+  });
+  res.status(response.status).type(response.headers.get('content-type') ?? 'application/json').send(await response.text());
+});
+
 // ── /api/dashboard/sessions — DB-backed paginated session list ──
 // The Rust API doesn't expose a cursor-friendly session listing, so the
 // dashboard queries Postgres directly under the same RLS context. The
@@ -394,6 +404,47 @@ app.get('/api/dashboard/workers', async (_req, res) => {
     console.error('GET /api/dashboard/workers failed', err);
     res.status(500).type('application/json').send(
       JSON.stringify({ error: 'Failed to load worker queue', detail: String(err) }),
+    );
+  }
+});
+
+// ── /api/projects — list non-global projects for the current org/team ──
+interface ProjectRow {
+  id: string;
+  name: string;
+  repo_url: string | null;
+  created_at: string;
+}
+
+app.get('/api/projects', async (_req, res) => {
+  try {
+    const rows: ProjectRow[] = await withRepositoryContext(sql, repoContext, async (tx: any): Promise<ProjectRow[]> => {
+      return (await tx`
+        SELECT
+          id::text        AS id,
+          name            AS name,
+          repo_url        AS repo_url,
+          created_at::text AS created_at
+        FROM public.projects
+        WHERE slug != 'global'
+        ORDER BY created_at DESC
+      `);
+    });
+
+    res.type('application/json').send(
+      JSON.stringify({
+        projects: rows.map((r) => ({
+          id: r.id,
+          name: r.name,
+          repoUrl: r.repo_url,
+          createdAt: r.created_at,
+        })),
+      }),
+    );
+  } catch (err) {
+    console.error('GET /api/projects failed', err);
+    res.status(500).type('application/json').send(
+      JSON.stringify({ error: 'Failed to list projects', detail: String(err) }),
     );
   }
 });

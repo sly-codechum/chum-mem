@@ -680,6 +680,20 @@ select { cursor: pointer; }
 .graph-toolbar .path-btn:hover { background: rgba(255, 255, 255, 0.12); color: #e6edf3; }
 .graph-toolbar .path-btn.active { background: rgba(57, 217, 138, 0.15); color: #39d98a; border-color: #39d98a; }
 
+.graph-toolbar .project-select {
+  height: 24px;
+  padding: 0 6px;
+  font-size: 11px;
+  font-weight: 500;
+  background: #161b22;
+  color: #e6edf3;
+  border: 1px solid #30363d;
+  border-radius: 6px;
+  cursor: pointer;
+  max-width: 160px;
+}
+.graph-toolbar .project-select:focus { outline: none; border-color: #39d98a; }
+
 /* ── Node inspector ── */
 .node-inspector {
   position: absolute;
@@ -1257,5 +1271,44 @@ select { cursor: pointer; }
   background: #39d98a;
   margin-right: 8px;
   flex-shrink: 0;
+}
+
+/* ── Governance actions ── */
+.governance-actions {
+  padding: 10px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.governance-state-label {
+  font-size: 0.75rem;
+  color: #8b949e;
+  font-weight: 500;
+}
+
+.governance-reason {
+  font-size: 0.78rem;
+}
+
+.governance-btn-row {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.governance-btn {
+  background: transparent;
+  border: 1px solid;
+  border-radius: 6px;
+  padding: 5px 12px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s, opacity 0.15s;
+}
+
+.governance-btn:hover {
+  background: rgba(255, 255, 255, 0.06);
 }
 `;

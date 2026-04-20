@@ -4,6 +4,7 @@ import {
   renderVerificationBadge,
   renderConflictIndicator,
 } from './Badges.js';
+import { ApiClient } from './ApiClient.js';
 
 function collapsibleSection(title: string, content: HTMLElement, startOpen = false): HTMLElement {
   const wrapper = document.createElement('div');
@@ -108,6 +109,71 @@ export function renderMemoryDetail(memory: Record<string, unknown>, container: H
     chain.appendChild(label);
     chain.appendChild(ref);
     container.appendChild(chain);
+  }
+
+  // Governance actions
+  const claimId = memory['claim_id'] ?? memory['id'];
+  if (claimId) {
+    const govSection = document.createElement('div');
+    govSection.className = 'governance-actions';
+
+    const currentState = String(memory['governance_state'] ?? 'active');
+    const stateLabel = document.createElement('span');
+    stateLabel.className = 'governance-state-label';
+    stateLabel.textContent = `State: ${currentState}`;
+    govSection.appendChild(stateLabel);
+
+    const reasonInput = document.createElement('input');
+    reasonInput.type = 'text';
+    reasonInput.placeholder = 'Reason (optional)';
+    reasonInput.className = 'governance-reason';
+    govSection.appendChild(reasonInput);
+
+    const btnRow = document.createElement('div');
+    btnRow.className = 'governance-btn-row';
+
+    const transitions: [string, string, string][] = [
+      ['active', 'Reactivate', '#39d98a'],
+      ['pinned', 'Pin', '#58a6ff'],
+      ['archived', 'Archive', '#8b949e'],
+      ['rejected', 'Reject', '#ff6b6b'],
+    ];
+
+    for (const [state, label, color] of transitions) {
+      if (state === currentState) continue;
+      const btn = document.createElement('button');
+      btn.className = 'governance-btn';
+      btn.textContent = label;
+      btn.style.borderColor = color;
+      btn.style.color = color;
+      btn.addEventListener('click', async () => {
+        btn.disabled = true;
+        const reason = reasonInput.value.trim() || undefined;
+        const result = await ApiClient.governClaim(String(claimId), state, reason);
+        if (result) {
+          stateLabel.textContent = `State: ${state}`;
+          memory['governance_state'] = state;
+          btnRow.querySelectorAll('button').forEach((b) => b.remove());
+          for (const [s2, l2, c2] of transitions) {
+            if (s2 === state) continue;
+            const b2 = document.createElement('button');
+            b2.className = 'governance-btn';
+            b2.textContent = l2;
+            b2.style.borderColor = c2;
+            b2.style.color = c2;
+            b2.addEventListener('click', () => {
+              renderMemoryDetail(memory, container);
+            });
+            btnRow.appendChild(b2);
+          }
+        }
+        btn.disabled = false;
+      });
+      btnRow.appendChild(btn);
+    }
+
+    govSection.appendChild(btnRow);
+    container.appendChild(collapsibleSection('Governance', govSection, false));
   }
 
   // Content section

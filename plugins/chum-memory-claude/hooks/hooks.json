@@ -7,7 +7,7 @@
           {
             "type": "command",
             "command": "bash \"${CLAUDE_PLUGIN_ROOT}/scripts/hook-dispatch.sh\"",
-            "timeout": 30
+            "timeout": 60
           }
         ]
       }

@@ -7,7 +7,7 @@
           {
             "type": "command",
             "command": "CHUM_PROVIDER=codex CHUM_SCRIPTS_DIR=__SCRIPTS_DIR__ bash __SCRIPTS_DIR__/hook-dispatch.sh",
-            "timeout": 30
+            "timeout": 60
           }
         ]
       }

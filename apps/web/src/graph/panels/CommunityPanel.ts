@@ -55,6 +55,7 @@ export class CommunityPanel extends Panel {
   // snapshot found" while the worker is running.
   private layer: Layer = 'repository';
   private sortKey: SortKey = 'cohesion';
+  private projectId: string | undefined = undefined;
 
   private listEl!: HTMLElement;
   private detailEl!: HTMLElement;
@@ -62,6 +63,10 @@ export class CommunityPanel extends Panel {
   constructor() {
     super();
     this.el.className = 'panel community-panel';
+    bus.on('project-change', ({ projectId }) => {
+      this.projectId = projectId;
+      void this.loadCommunities();
+    });
   }
 
   mount(): Promise<void> {
@@ -145,7 +150,7 @@ export class CommunityPanel extends Panel {
     this.listEl.innerHTML = '<div class="state-loading">Loading communities...</div>';
     this.renderEmptyDetail();
 
-    const raw = await ApiClient.getCommunities(this.layer) as { communities?: CommunityRaw[] } | CommunityRaw[] | null;
+    const raw = await ApiClient.getCommunities(this.layer, this.projectId) as { communities?: CommunityRaw[] } | CommunityRaw[] | null;
     if (!raw) {
       // API returned non-2xx (most commonly 404 "No knowledge graph snapshot
       // found" on the session layer while a rebuild is in flight). Show a
