@@ -2266,7 +2266,13 @@ async fn perform_knowledge_report(
     project_id: Option<Uuid>,
     layer: Option<&str>,
 ) -> Result<KnowledgeReportResponse, DomainError> {
-    let context = scoped_context(&state.scope, project_id)?;
+    // Knowledge reports are always project-scoped — no global fallback.
+    let resolved_pid = project_id.or(state.scope.project_id).ok_or_else(|| {
+        DomainError::BadRequest(
+            "projectId is required for knowledge_report".to_string(),
+        )
+    })?;
+    let context = scoped_context(&state.scope, Some(resolved_pid))?;
     let mut tx = begin_tx(state, &context).await?;
 
     // v2.2.2: Support unified layer that merges repository + session reports
@@ -2433,10 +2439,31 @@ async fn perform_knowledge_communities(
     project_id: Option<Uuid>,
     layer: Option<&str>,
 ) -> Result<KnowledgeCommunitiesResponse, DomainError> {
-    let context = scoped_context(&state.scope, project_id)?;
+    let is_repo = layer == Some("repository");
+    let resolved_pid = if is_repo {
+        Some(project_id.or(state.scope.project_id).ok_or_else(|| {
+            DomainError::BadRequest(
+                "projectId is required for repository-layer community queries".to_string(),
+            )
+        })?)
+    } else {
+        project_id.or(state.scope.project_id)
+    };
+    let context = scoped_context(&state.scope, resolved_pid)?;
     let mut tx = begin_tx(state, &context).await?;
-    let graph = load_latest_knowledge_graph_by_type(&mut tx, &context, layer)
-        .await?
+    let mut graph = load_latest_knowledge_graph_by_type(&mut tx, &context, layer).await?;
+
+    // Session layer: fall back to global project if project-scoped query found nothing
+    if graph.is_none() && !is_repo && resolved_pid.is_some() {
+        if let Some(global_pid) = resolve_global_project_id(&mut tx, &state.scope).await {
+            if resolved_pid != Some(global_pid) {
+                let global_ctx = scoped_context(&state.scope, Some(global_pid))?;
+                graph = load_latest_knowledge_graph_by_type(&mut tx, &global_ctx, layer).await?;
+            }
+        }
+    }
+
+    let graph = graph
         .ok_or_else(|| DomainError::NotFound("No knowledge graph snapshot found".to_string()))?;
     commit_tx(tx).await?;
     Ok(KnowledgeCommunitiesResponse {
@@ -2460,9 +2487,30 @@ async fn perform_knowledge_query(
     input: KnowledgeQueryRequest,
     layer: Option<&str>,
 ) -> Result<GraphQueryResponse, DomainError> {
-    let context = scoped_context(&state.scope, input.project_id)?;
+    let is_repo = layer == Some("repository");
+    let resolved_pid = if is_repo {
+        Some(input.project_id.or(state.scope.project_id).ok_or_else(|| {
+            DomainError::BadRequest(
+                "projectId is required for repository-layer knowledge queries".to_string(),
+            )
+        })?)
+    } else {
+        input.project_id.or(state.scope.project_id)
+    };
+    let context = scoped_context(&state.scope, resolved_pid)?;
     let mut tx = begin_tx(state, &context).await?;
-    let graph = load_latest_knowledge_graph_by_type(&mut tx, &context, layer).await?;
+    let mut graph = load_latest_knowledge_graph_by_type(&mut tx, &context, layer).await?;
+
+    // Session layer: fall back to global project if project-scoped query found nothing
+    if graph.is_none() && !is_repo && resolved_pid.is_some() {
+        if let Some(global_pid) = resolve_global_project_id(&mut tx, &state.scope).await {
+            if resolved_pid != Some(global_pid) {
+                let global_ctx = scoped_context(&state.scope, Some(global_pid))?;
+                graph = load_latest_knowledge_graph_by_type(&mut tx, &global_ctx, layer).await?;
+            }
+        }
+    }
+
     commit_tx(tx).await?;
 
     let graph = graph

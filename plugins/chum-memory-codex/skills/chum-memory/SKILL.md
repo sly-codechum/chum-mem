@@ -50,8 +50,9 @@ The system operates in **multi-project mode**. Each project folder is automatica
 4. The resolved project ID is cached in `.chum-mem` and exported as `CHUM_MEM_PROJECT_ID`
 
 **Scoping rules:**
-- **Repository layer** (`knowledge_query`, `knowledge_report`, `knowledge_communities`): strictly per-project. Each project folder has its own knowledge graph built from its synced code. No cross-project fallback.
-- **Session layer** (`mem_search`): per-project with **global fallback**. If a project-specific memory search returns no results, the system automatically retries against the "global" project (which holds all historical memories from before per-project scoping). This ensures past decisions and facts are always accessible.
+- **Repository layer** (`knowledge_query`, `knowledge_report`, `knowledge_communities`): **strictly per-project**. `projectId` is required — the API returns an error if omitted. Each project folder has its own knowledge graph built from its synced code. No cross-project fallback. The hook always passes the resolved project ID automatically.
+- **Session layer** (`knowledge_query`, `knowledge_communities`): per-project with **global fallback**. If a project-specific session graph query finds no snapshot, the API automatically retries against the "global" project.
+- **Memory search** (`mem_search`): per-project with **global fallback**. If a project-specific memory search returns no results, the system automatically retries against the "global" project (which holds all historical memories from before per-project scoping). This ensures past decisions and facts are always accessible.
 - **Sessions**: scoped to the project folder where they occur. The hook exports the project ID so `session_start` associates the session with the correct project.
 
 You never need to manage project IDs manually — the hook handles everything.
