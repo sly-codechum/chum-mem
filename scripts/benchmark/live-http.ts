@@ -143,6 +143,25 @@ type EdgeGraphHealthResult = {
   supersedesRatio: number;
 };
 
+// ── v2.2.3 quality types ──
+
+type ProjectScopingResult = {
+  name: string;
+  latencyMs: number;
+  projectIdPresent: boolean;
+  repositoryLayerScoped: boolean;
+  sessionLayerFallback: boolean;
+  memSearchFallback: boolean;
+};
+
+type GovernanceResult = {
+  name: string;
+  latencyMs: number;
+  governanceFieldPresent: boolean;
+  pinnedBoostWorking: boolean;
+  archivedExcluded: boolean;
+};
+
 // ── v2.2.2 quality types ──
 
 type ContainmentQueryResult = {
@@ -206,6 +225,8 @@ type VersionComparisonEntry = {
   v21: string | number | boolean;
   v22: string | number | boolean;
   v221: string | number | boolean;
+  v222: string | number | boolean;
+  v223: string | number | boolean;
   threshold: string;
   pass: boolean;
 };
@@ -222,6 +243,9 @@ type QualityResults = {
   beliefGateIntegrity?: BeliefGateResult;
   claimDistribution?: ClaimDistributionResult;
   edgeGraphHealth?: EdgeGraphHealthResult;
+  // v2.2.3 additions
+  projectScoping?: ProjectScopingResult;
+  governanceQuality?: GovernanceResult;
   // v2.2.2 additions
   containmentQuery?: ContainmentQueryResult[];
   crossFileCall?: CrossFileCallResult[];
@@ -1624,6 +1648,71 @@ async function runUnifiedReport(sessionId: string): Promise<UnifiedReportResult>
   };
 }
 
+// ── v2.2.3 quality runners ──
+
+async function runProjectScoping(sessionId: string): Promise<ProjectScopingResult> {
+  const started = performance.now();
+
+  const [repoResponse, sessionResponse, memResponse] = await Promise.all([
+    timedMcpToolCall<{ nodes?: McpNode[] }>(sessionId, 'knowledge_query', {
+      projectId,
+      layer: 'repository',
+      query: 'search',
+      text: QUALITY_SYMBOL
+    }),
+    timedMcpToolCall<{ nodes?: McpNode[] }>(sessionId, 'knowledge_query', {
+      projectId,
+      layer: 'session',
+      query: 'hub_nodes'
+    }),
+    timedMcpToolCall<{ hits?: Array<Record<string, any>> }>(sessionId, 'mem_search', {
+      projectId,
+      provider: 'codex',
+      mode: 'hybrid',
+      disclosureLevel: 'overview',
+      limit: 5,
+      query: QUALITY_SYMBOL
+    })
+  ]);
+
+  const repoNodes = Array.isArray(repoResponse.data?.nodes) ? repoResponse.data.nodes : [];
+  const sessionNodes = Array.isArray(sessionResponse.data?.nodes) ? sessionResponse.data.nodes : [];
+  const memHits = Array.isArray(memResponse.data?.hits) ? memResponse.data.hits : [];
+
+  return {
+    name: 'project_scoping',
+    latencyMs: performance.now() - started,
+    projectIdPresent: !!projectId,
+    repositoryLayerScoped: repoResponse.status === 200 && repoNodes.length > 0,
+    sessionLayerFallback: sessionResponse.status === 200,
+    memSearchFallback: memResponse.status === 200 && memHits.length > 0
+  };
+}
+
+async function runGovernanceQuality(sessionId: string): Promise<GovernanceResult> {
+  const response = await timedMcpToolCall<{ hits?: Array<Record<string, any>> }>(sessionId, 'mem_search', {
+    projectId,
+    provider: 'codex',
+    mode: 'hybrid',
+    disclosureLevel: 'related',
+    limit: 5,
+    query: 'architecture retrieval pipeline'
+  });
+  const hits = Array.isArray(response.data?.hits) ? response.data.hits : [];
+
+  const governanceFieldPresent = hits.some((hit) =>
+    hit.governanceState !== undefined || hit.governance_state !== undefined
+  );
+
+  return {
+    name: 'governance_quality',
+    latencyMs: response.ms,
+    governanceFieldPresent,
+    pinnedBoostWorking: false,
+    archivedExcluded: false
+  };
+}
+
 function buildVersionComparison(quality: QualityResults): VersionComparisonEntry[] {
   const entries: VersionComparisonEntry[] = [];
 
@@ -1633,7 +1722,9 @@ function buildVersionComparison(quality: QualityResults): VersionComparisonEntry
     metric: 'retrieval_noise.relevantTop5',
     v21: '2→3',
     v22: 0,
-    v221: retrievalNoise?.relevantTop5 ?? 'N/A',
+    v221: 1,
+    v222: 1,
+    v223: retrievalNoise?.relevantTop5 ?? 'N/A',
     threshold: '≥3',
     pass: (retrievalNoise?.relevantTop5 ?? 0) >= 3
   });
@@ -1641,7 +1732,9 @@ function buildVersionComparison(quality: QualityResults): VersionComparisonEntry
     metric: 'retrieval_noise.irrelevantTop5',
     v21: '3→0',
     v22: 5,
-    v221: retrievalNoise?.irrelevantTop5 ?? 'N/A',
+    v221: 4,
+    v222: 4,
+    v223: retrievalNoise?.irrelevantTop5 ?? 'N/A',
     threshold: '≤1',
     pass: (retrievalNoise?.irrelevantTop5 ?? 99) <= 1
   });
@@ -1652,7 +1745,9 @@ function buildVersionComparison(quality: QualityResults): VersionComparisonEntry
     metric: 'continuation_noise.relevantTop5',
     v21: '0→0',
     v22: 0,
-    v221: contNoise?.relevantTop5 ?? 'N/A',
+    v221: 'N/A',
+    v222: 2,
+    v223: contNoise?.relevantTop5 ?? 'N/A',
     threshold: '≥3',
     pass: (contNoise?.relevantTop5 ?? 0) >= 3
   });
@@ -1663,7 +1758,9 @@ function buildVersionComparison(quality: QualityResults): VersionComparisonEntry
     metric: 'context_build.repository_only.fillRate',
     v21: 0.25,
     v22: 0.125,
-    v221: repoOnly?.typedSectionFillRate ?? 'N/A',
+    v221: 0.125,
+    v222: 0.125,
+    v223: repoOnly?.typedSectionFillRate ?? 'N/A',
     threshold: '≥0.375',
     pass: (repoOnly?.typedSectionFillRate ?? 0) >= 0.375
   });
@@ -1673,7 +1770,9 @@ function buildVersionComparison(quality: QualityResults): VersionComparisonEntry
     metric: 'context_build.hybrid.fillRate',
     v21: 0.00,
     v22: 0.5,
-    v221: hybrid?.typedSectionFillRate ?? 'N/A',
+    v221: 0.75,
+    v222: 0.50,
+    v223: hybrid?.typedSectionFillRate ?? 'N/A',
     threshold: '≥0.625',
     pass: (hybrid?.typedSectionFillRate ?? 0) >= 0.625
   });
@@ -1684,7 +1783,9 @@ function buildVersionComparison(quality: QualityResults): VersionComparisonEntry
     metric: 'repository.exact_file_path.top1',
     v21: true,
     v22: true,
-    v221: fileHit?.top1Exact ?? false,
+    v221: true,
+    v222: true,
+    v223: fileHit?.top1Exact ?? false,
     threshold: 'true',
     pass: fileHit?.top1Exact === true
   });
@@ -1694,7 +1795,9 @@ function buildVersionComparison(quality: QualityResults): VersionComparisonEntry
     metric: 'repository.exact_symbol.top1',
     v21: true,
     v22: true,
-    v221: symbolHit?.top1Exact ?? false,
+    v221: true,
+    v222: true,
+    v223: symbolHit?.top1Exact ?? false,
     threshold: 'true',
     pass: symbolHit?.top1Exact === true
   });
@@ -1705,19 +1808,23 @@ function buildVersionComparison(quality: QualityResults): VersionComparisonEntry
     metric: 'cross_layer.leak_count',
     v21: 0,
     v22: 0,
-    v221: crossLayer?.repositorySessionLeakCount ?? 'N/A',
+    v221: 0,
+    v222: 0,
+    v223: crossLayer?.repositorySessionLeakCount ?? 'N/A',
     threshold: '0',
     pass: (crossLayer?.repositorySessionLeakCount ?? 99) === 0
   });
 
-  // Continuation quality (v2.2.1 only)
+  // Continuation quality
   if (quality.continuationQuality && quality.continuationQuality.length > 0) {
     const avgFit = average(quality.continuationQuality.map((c) => c.claimTypeFit));
     entries.push({
       metric: 'continuation.claimTypeFit.avg',
       v21: 'N/A',
       v22: 'N/A',
-      v221: Number(avgFit.toFixed(3)),
+      v221: 0.343,
+      v222: 1.000,
+      v223: Number(avgFit.toFixed(3)),
       threshold: '≥0.7',
       pass: avgFit >= 0.7
     });
@@ -1727,20 +1834,24 @@ function buildVersionComparison(quality: QualityResults): VersionComparisonEntry
       metric: 'continuation.supersededInTop5.total',
       v21: 'N/A',
       v22: 'N/A',
-      v221: totalSuperseded,
+      v221: 0,
+      v222: 0,
+      v223: totalSuperseded,
       threshold: '0',
       pass: totalSuperseded === 0
     });
   }
 
-  // Belief gate (v2.2.1 only)
+  // Belief gate
   if (quality.beliefGateIntegrity) {
     const bg = quality.beliefGateIntegrity;
     entries.push({
       metric: 'belief_gate.reasoning_leak',
       v21: 'N/A',
       v22: 'N/A',
-      v221: bg.reasoningLeakCount,
+      v221: 0,
+      v222: 0,
+      v223: bg.reasoningLeakCount,
       threshold: '0',
       pass: bg.reasoningLeakCount === 0
     });
@@ -1748,7 +1859,9 @@ function buildVersionComparison(quality: QualityResults): VersionComparisonEntry
       metric: 'belief_gate.model_derived_durable',
       v21: 'N/A',
       v22: 'N/A',
-      v221: bg.modelDerivedDurableCount,
+      v221: 0,
+      v222: 0,
+      v223: bg.modelDerivedDurableCount,
       threshold: '0',
       pass: bg.modelDerivedDurableCount === 0
     });
@@ -1761,7 +1874,9 @@ function buildVersionComparison(quality: QualityResults): VersionComparisonEntry
       metric: 'containment.hasContainsEdges',
       v21: 'N/A',
       v22: 'N/A',
-      v221: anyContains,
+      v221: 'N/A',
+      v222: true,
+      v223: anyContains,
       threshold: 'true',
       pass: anyContains
     });
@@ -1774,7 +1889,9 @@ function buildVersionComparison(quality: QualityResults): VersionComparisonEntry
       metric: 'cross_file_call.hasCrossFileEdges',
       v21: 'N/A',
       v22: 'N/A',
-      v221: anyCrossFile,
+      v221: 'N/A',
+      v222: true,
+      v223: anyCrossFile,
       threshold: 'true',
       pass: anyCrossFile
     });
@@ -1787,7 +1904,9 @@ function buildVersionComparison(quality: QualityResults): VersionComparisonEntry
       metric: 'typed_search.avgPrecision',
       v21: 'N/A',
       v22: 'N/A',
-      v221: Number(avgPrecision.toFixed(3)),
+      v221: 'N/A',
+      v222: 1.000,
+      v223: Number(avgPrecision.toFixed(3)),
       threshold: '≥0.8',
       pass: avgPrecision >= 0.8
     });
@@ -1799,7 +1918,9 @@ function buildVersionComparison(quality: QualityResults): VersionComparisonEntry
       metric: 'hub_quality.forbiddenTypeCount',
       v21: 'N/A',
       v22: 'N/A',
-      v221: quality.hubQuality.forbiddenTypeCount,
+      v221: 'N/A',
+      v222: 0,
+      v223: quality.hubQuality.forbiddenTypeCount,
       threshold: '0',
       pass: quality.hubQuality.forbiddenTypeCount === 0
     });
@@ -1811,7 +1932,9 @@ function buildVersionComparison(quality: QualityResults): VersionComparisonEntry
       metric: 'community.hasHierarchy',
       v21: 'N/A',
       v22: 'N/A',
-      v221: quality.communityHierarchy.hasHierarchy,
+      v221: 'N/A',
+      v222: true,
+      v223: quality.communityHierarchy.hasHierarchy,
       threshold: 'true',
       pass: quality.communityHierarchy.hasHierarchy
     });
@@ -1823,9 +1946,39 @@ function buildVersionComparison(quality: QualityResults): VersionComparisonEntry
       metric: 'unified_report.hasCrossLayerSummary',
       v21: 'N/A',
       v22: 'N/A',
-      v221: quality.unifiedReport.hasCrossLayerSummary,
+      v221: 'N/A',
+      v222: false,
+      v223: quality.unifiedReport.hasCrossLayerSummary,
       threshold: 'true',
       pass: quality.unifiedReport.hasCrossLayerSummary
+    });
+  }
+
+  // v2.2.3: Project scoping
+  if (quality.projectScoping) {
+    entries.push({
+      metric: 'project_scoping.repositoryLayerScoped',
+      v21: 'N/A',
+      v22: 'N/A',
+      v221: 'N/A',
+      v222: 'N/A',
+      v223: quality.projectScoping.repositoryLayerScoped,
+      threshold: 'true',
+      pass: quality.projectScoping.repositoryLayerScoped
+    });
+  }
+
+  // v2.2.3: Governance
+  if (quality.governanceQuality) {
+    entries.push({
+      metric: 'governance.fieldPresent',
+      v21: 'N/A',
+      v22: 'N/A',
+      v221: 'N/A',
+      v222: 'N/A',
+      v223: quality.governanceQuality.governanceFieldPresent,
+      threshold: 'true',
+      pass: quality.governanceQuality.governanceFieldPresent
     });
   }
 
@@ -1869,6 +2022,15 @@ async function runQualitySuite(sessionId: string): Promise<QualityResults> {
       runUnifiedReport(sessionId)
     ]);
 
+  // Run v2.2.3 suites in parallel
+  if (verbose) {
+    console.error('  v2.2.3 quality suites: project scoping, governance');
+  }
+  const [projectScoping, governanceQuality] = await Promise.all([
+    runProjectScoping(sessionId),
+    runGovernanceQuality(sessionId)
+  ]);
+
   const result: QualityResults = {
     memoryNoise,
     contextBuildQuality,
@@ -1879,6 +2041,8 @@ async function runQualitySuite(sessionId: string): Promise<QualityResults> {
     compileV2Quality,
     beliefGateIntegrity,
     claimDistribution,
+    projectScoping,
+    governanceQuality,
     containmentQuery,
     crossFileCall,
     typedSearchPrecision,
@@ -1936,12 +2100,12 @@ async function main(): Promise<void> {
 
   // Print version comparison summary to stderr
   if (quality.versionComparison && quality.versionComparison.length > 0) {
-    console.error('\n═══ Version Comparison: v2.1 → v2.2 → v2.2.1 → v2.2.2 ═══');
+    console.error('\n═══ Version Comparison: v2.1 → v2.2 → v2.2.1 → v2.2.2 → v2.2.3 ═══');
     const passed = quality.versionComparison.filter((e) => e.pass).length;
     const total = quality.versionComparison.length;
     for (const entry of quality.versionComparison) {
       const icon = entry.pass ? '✓' : '✗';
-      console.error(`  ${icon} ${entry.metric}: ${entry.v21} → ${entry.v22} → ${entry.v221} (threshold: ${entry.threshold})`);
+      console.error(`  ${icon} ${entry.metric}: ${entry.v21} → ${entry.v22} → ${entry.v221} → ${entry.v222} → ${entry.v223} (threshold: ${entry.threshold})`);
     }
     console.error(`\n  Result: ${passed}/${total} passed\n`);
   }

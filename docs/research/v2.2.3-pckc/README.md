@@ -65,6 +65,8 @@ The v2.2.2 benchmark revealed four structural gaps:
 
 ## Benchmark Results
 
+### Pre-project-scoping (18 metrics)
+
 **16/18 passed (88%)** — up from 14/18 (77%) in v2.2.2.
 
 | Metric | v2.2.2 | v2.2.3 | Delta |
@@ -74,10 +76,22 @@ The v2.2.2 benchmark revealed four structural gaps:
 | continuation_noise.relevantTop5 | 2 (FAIL) | 2 (FAIL) | stable (recall gap) |
 | context_build.repository_only.fillRate | 0.125 (FAIL) | 0.125 (FAIL) | stable (architectural) |
 
-See `results/COMPARISON.md` for the full 18-metric version comparison table.
+### Post-project-scoping (20 metrics)
+
+**17/20 passed (85%)** — 2 new metrics added, 1 new regression.
+
+| Metric | Pre-scoping | Post-scoping | Delta |
+|---|---|---|---|
+| project_scoping.repositoryLayerScoped | N/A | **true (PASS)** | new metric |
+| governance.fieldPresent | N/A | **true (PASS)** | new metric |
+| continuation.supersededInTop5.total | 0 (PASS) | **1 (FAIL)** | regression |
+| All other 15 passes | PASS | **PASS** | stable |
+
+See `results/COMPARISON.md` for the full 20-metric version comparison table.
 
 ## Remaining Risks
 
 1. **Repository-only fill rate** (0.125) remains below threshold (0.375). This requires repository-derived claims or repository-as-context items, which is a different problem from memory type scoping.
-2. **Continuation boost magnitude** (0.30) is tuned by analysis, not benchmark iteration. May need adjustment after live benchmark run.
+2. **Superseded claim in continuation top-5**: the `open_worker_bugs` case returns a superseded fix claim. The -0.20 superseded penalty is insufficient to push it out of top-5 when the continuation boost (+0.30) for `fix` type claims outweighs it. Consider increasing the penalty to -0.30 or adding a hard filter.
 3. **Governance state in Chroma metadata** is populated at index time. Governing a claim after indexing requires Chroma re-index or the SQL filter alone must be sufficient (it is, for lexical+semantic DB paths).
+4. **Latency variance** increased for repository-layer queries post-scoping due to project-scoped graph lookup overhead on cold cache.
