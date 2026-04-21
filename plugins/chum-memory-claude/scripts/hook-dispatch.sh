@@ -82,6 +82,23 @@ if [[ -z "${RESOLVED_PROJECT_ID:-}" || "$RESOLVED_PROJECT_ID" == "null" ]]; then
 fi
 export CHUM_MEM_PROJECT_ID="${RESOLVED_PROJECT_ID:-${CHUM_MEM_PROJECT_ID:-}}"
 
+# ── Ensure .mcp.json carries the project ID in the URL for Claude Code ──
+# Claude Code's HTTP MCP transport uses the URL from .mcp.json. The env var
+# expansion in headers may not have access to CHUM_MEM_PROJECT_ID (set in hook
+# subprocess, not parent). Embedding it in the URL guarantees delivery.
+if [[ -n "${CHUM_MEM_PROJECT_ID:-}" ]]; then
+  MCP_JSON_PATH="${SCRIPTS_DIR}/../.mcp.json"
+  MCP_URL_WITH_PROJECT="${API_URL}/mcp?projectId=${CHUM_MEM_PROJECT_ID}"
+  if [[ -f "$MCP_JSON_PATH" ]]; then
+    CURRENT_URL=$(jq -r '.mcpServers["chum-memory"].url // ""' "$MCP_JSON_PATH" 2>/dev/null || echo "")
+    if [[ "$CURRENT_URL" != "$MCP_URL_WITH_PROJECT" ]]; then
+      jq --arg url "$MCP_URL_WITH_PROJECT" \
+        '.mcpServers["chum-memory"].url = $url' "$MCP_JSON_PATH" > "${MCP_JSON_PATH}.tmp" \
+        && mv "${MCP_JSON_PATH}.tmp" "$MCP_JSON_PATH"
+    fi
+  fi
+fi
+
 # ── Session layer (always runs for every event) ──
 SESSION_STDERR=""
 if [[ -x "${SCRIPTS_DIR}/session-sync.sh" ]]; then

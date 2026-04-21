@@ -565,12 +565,32 @@ fn jsonrpc_error(id: &Value, code: i32, message: &str) -> Value {
     json!({"jsonrpc":"2.0","id":id,"error":{"code":code,"message":message}})
 }
 
-async fn handle_mcp_call(state: &ApiState, method: &str, params: &Value) -> Result<Value, String> {
-    let args = if let Some(a) = params.get("arguments") {
-        a
+async fn handle_mcp_call(
+    state: &ApiState,
+    method: &str,
+    params: &Value,
+    default_project_id: Option<Uuid>,
+) -> Result<Value, String> {
+    let raw_args = if let Some(a) = params.get("arguments") {
+        a.clone()
     } else {
-        params
+        params.clone()
     };
+    // Inject default projectId into args when not already present
+    let args = if default_project_id.is_some()
+        && raw_args.is_object()
+        && raw_args.get("projectId").and_then(|v| v.as_str()).is_none()
+    {
+        let mut obj = raw_args.as_object().unwrap().clone();
+        obj.insert(
+            "projectId".to_string(),
+            json!(default_project_id.unwrap().to_string()),
+        );
+        Value::Object(obj)
+    } else {
+        raw_args
+    };
+    let args = &args;
     let tool_name = params
         .get("name")
         .and_then(|v| v.as_str())
@@ -763,6 +783,26 @@ async fn mcp_post(State(state): State<ApiState>, request: Request) -> Result<Res
         .and_then(|v| v.to_str().ok())
         .map(String::from);
 
+    // Project scoping: prefer X-Chum-Project-Id header, then URL query param,
+    // then startup-time env fallback. This allows the Claude plugin hook to pass
+    // the resolved project ID without needing tool-level argument injection.
+    let default_project_id = request
+        .headers()
+        .get("x-chum-project-id")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.parse::<Uuid>().ok())
+        .or_else(|| {
+            request
+                .uri()
+                .query()
+                .and_then(|q| {
+                    q.split('&')
+                        .find_map(|pair| pair.strip_prefix("projectId="))
+                })
+                .and_then(|s| s.parse::<Uuid>().ok())
+        })
+        .or(state.scope.project_id);
+
     let body_bytes = axum::body::to_bytes(request.into_body(), 8 * 1024 * 1024)
         .await
         .map_err(|e| ApiError::bad_request(e.to_string()))?;
@@ -850,10 +890,11 @@ async fn mcp_post(State(state): State<ApiState>, request: Request) -> Result<Res
                 }
             }
 
-            let result = match handle_mcp_call(&state, method, &params).await {
-                Ok(content) => jsonrpc_ok(&id, content),
-                Err(err) => jsonrpc_error(&id, -32000, &err),
-            };
+            let result =
+                match handle_mcp_call(&state, method, &params, default_project_id).await {
+                    Ok(content) => jsonrpc_ok(&id, content),
+                    Err(err) => jsonrpc_error(&id, -32000, &err),
+                };
 
             let response_body =
                 serde_json::to_string(&result).map_err(|e| ApiError::internal(e.to_string()))?;
