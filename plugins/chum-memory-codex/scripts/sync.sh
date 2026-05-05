@@ -19,7 +19,7 @@ mkdir -p "$CACHE_DIR"
 if [[ ! -f "$RULES_FILE" ]]; then
   curl -sf --max-time 5 "${API_URL}/api/knowledge/sync-rules" > "$RULES_FILE" 2>/dev/null || {
     cat > "$RULES_FILE" <<'RULES'
-{"codeExtensions":["ts","tsx","js","jsx","mjs","cjs","py","go","rs","java","c","cc","cpp","h","hpp","rb","cs","kt","scala","php","swift","lua","zig","ps1","sh","sql","html","htm","css","scss","sass","less","vue","svelte","astro"],"docExtensions":["md","mdx","txt","rst","yaml","yml","json","jsonc"],"ignoreDirs":[".git","node_modules","dist","build","out","target","__pycache__","venv",".venv",".next",".nuxt","coverage",".turbo",".cache","graphify-out"],"ignoreFiles":[".DS_Store","package-lock.json","pnpm-lock.yaml","yarn.lock","bun.lockb","Cargo.lock"],"ignorePatterns":[".env*","*.pem","*.key","*.crt","*.min.js","*.min.css","*.map","*.d.ts","*.generated.ts","*.generated.js"],"maxFileSizeBytes":262144}
+{"codeExtensions":["ts","tsx","js","jsx","mjs","cjs","py","go","rs","java","c","cc","cpp","h","hpp","cxx","hxx","rb","cs","kt","kts","scala","php","swift","lua","zig","ps1","sh","sql","css","scss","sass","less","vue","svelte","astro","m","mm","jl","dart"],"docExtensions":["md","mdx","html","htm","txt","rst","yaml","yml","json","jsonc","docx","xlsx","pptx","pdf","png","jpg","jpeg","webp","gif","mp4","mov","m4v","mp3","wav"],"binaryExtensions":["docx","xlsx","pptx","pdf","png","jpg","jpeg","webp","gif","mp4","mov","m4v","mp3","wav"],"ignoreDirs":[".git","node_modules","dist","build","out","target","__pycache__","venv",".venv",".next",".nuxt","coverage",".turbo",".cache","graphify-out"],"ignoreFiles":[".DS_Store","package-lock.json","pnpm-lock.yaml","yarn.lock","bun.lockb","Cargo.lock"],"ignorePatterns":[".env*","*.pem","*.key","*.crt","*.min.js","*.min.css","*.map","*.d.ts","*.generated.ts","*.generated.js"],"maxFileSizeBytes":262144,"maxBinaryFileSizeBytes":16777216}
 RULES
   }
 fi
@@ -31,7 +31,7 @@ STATE_FILE=$(mktemp /tmp/chum-sync-state.XXXXXX)
 trap 'rm -f "$PAYLOAD_FILE" "$STATE_FILE"' EXIT
 
 RESULT=$(python3 -s - "$CACHE_DIR" "$RULES_FILE" "$PROJECT_ID" "$PAYLOAD_FILE" "$STATE_FILE" <<'PYTHON'
-import hashlib, json, os, subprocess, sys, fnmatch
+import base64, hashlib, json, mimetypes, os, subprocess, sys, fnmatch
 
 cache_dir, rules_file, project_id, payload_file, state_file = sys.argv[1:6]
 manifest_file = os.path.join(cache_dir, "manifest.tsv")
@@ -41,9 +41,11 @@ with open(rules_file) as f:
     rules = json.load(f)
 
 valid_exts = set(rules.get("codeExtensions", []) + rules.get("docExtensions", []))
+binary_exts = set(rules.get("binaryExtensions", []))
 ignore_files = set(rules.get("ignoreFiles", []))
 ignore_patterns = rules.get("ignorePatterns", [])
 max_size = rules.get("maxFileSizeBytes", 262144)
+max_binary_size = rules.get("maxBinaryFileSizeBytes", 16 * 1024 * 1024)
 
 try:
     out = subprocess.check_output(
@@ -66,7 +68,9 @@ for filepath in out.strip().splitlines():
     if not os.path.isfile(filepath):
         continue
     try:
-        if os.path.getsize(filepath) > max_size:
+        size = os.path.getsize(filepath)
+        limit = max_binary_size if ext in binary_exts else max_size
+        if size > limit:
             continue
     except OSError:
         continue
@@ -106,11 +110,24 @@ if not to_send and not removed:
 
 files_payload = []
 for p in to_send:
+    ext = p.rsplit(".", 1)[-1].lower() if "." in p else ""
+    size = os.path.getsize(p)
     try:
-        content = open(p, "r", errors="replace").read()
+        if ext in binary_exts:
+            with open(p, "rb") as f:
+                encoded = base64.b64encode(f.read()).decode("ascii")
+            files_payload.append({
+                "path": p,
+                "hash": current[p],
+                "bytesBase64": encoded,
+                "mediaType": mimetypes.guess_type(p)[0],
+                "sizeBytes": size,
+            })
+        else:
+            content = open(p, "r", errors="replace").read()
+            files_payload.append({"path": p, "hash": current[p], "content": content, "sizeBytes": size})
     except Exception:
         continue
-    files_payload.append({"path": p, "hash": current[p], "content": content})
 
 payload = {
     "files": files_payload,

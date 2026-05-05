@@ -4,7 +4,9 @@
 Build `chum-mem` as a cloud-native persistent memory platform for coding agents.
 
 Memory-first rule for this workspace:
-- run `mem_search` first for the current objective
+- run `knowledge_report(layer:"repository")` first and treat the markdown as primary high-level repository context
+- run repository-layer `knowledge_query` second for relevant architecture, components, and relationships
+- run compact `mem_search` third for the current objective
 - fetch full detail only via `memory_get_batch` for selected IDs
 - use `context_build` only when needed
 - continue without memory only if user explicitly requests it

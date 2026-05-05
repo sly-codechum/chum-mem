@@ -1,5 +1,6 @@
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fs;
+use std::io::{Cursor, Read};
 use std::path::{Path, PathBuf};
 
 use regex::Regex;
@@ -17,15 +18,26 @@ use crate::{
 
 const DEFAULT_OUT_DIR_NAME: &str = "graphify-out";
 
-/// Skip files larger than 256 KB — they're usually generated, vendored, or data dumps.
+/// Skip large text/code files — they're usually generated, vendored, or data dumps.
 const MAX_FILE_SIZE_BYTES: u64 = 256 * 1024;
+/// Binary repository artifacts are parsed for structure/metadata only and may be larger.
+const MAX_BINARY_FILE_SIZE_BYTES: u64 = 16 * 1024 * 1024;
 
 const CODE_EXTENSIONS: &[&str] = &[
     "ts", "tsx", "js", "jsx", "mjs", "cjs", "py", "go", "rs", "java", "c", "cc", "cpp", "h", "hpp",
-    "rb", "cs", "kt", "scala", "php", "swift", "lua", "zig", "ps1", "sh", "sql", "html", "htm",
-    "css", "scss", "sass", "less", "vue", "svelte", "astro",
+    "cxx", "hxx", "rb", "cs", "kt", "kts", "scala", "php", "swift", "lua", "zig", "ps1", "sh",
+    "sql", "css", "scss", "sass", "less", "vue", "svelte", "astro", "ex", "exs", "m", "mm", "jl",
+    "dart",
 ];
-const DOC_EXTENSIONS: &[&str] = &["md", "mdx", "txt", "rst", "yaml", "yml", "json", "jsonc"];
+const DOC_EXTENSIONS: &[&str] = &[
+    "md", "mdx", "html", "htm", "txt", "rst", "yaml", "yml", "json", "jsonc",
+];
+const OFFICE_DOCUMENT_EXTENSIONS: &[&str] = &["docx"];
+const SPREADSHEET_EXTENSIONS: &[&str] = &["xlsx"];
+const PRESENTATION_EXTENSIONS: &[&str] = &["pptx"];
+const PDF_EXTENSIONS: &[&str] = &["pdf"];
+const IMAGE_EXTENSIONS: &[&str] = &["png", "jpg", "jpeg", "webp", "gif"];
+const MEDIA_EXTENSIONS: &[&str] = &["mp4", "mov", "m4v", "mp3", "wav"];
 const IGNORE_DIRS: &[&str] = &[
     ".git",
     ".svn",
@@ -124,6 +136,51 @@ pub struct RepositoryBuildResult {
 enum FileKind {
     Code,
     Doc,
+    OfficeDocument,
+    Spreadsheet,
+    Presentation,
+    Pdf,
+    Image,
+    Media,
+    Unsupported,
+}
+
+impl FileKind {
+    fn is_textual(self) -> bool {
+        matches!(self, Self::Code | Self::Doc)
+    }
+
+    fn is_binary(self) -> bool {
+        !self.is_textual() && self != Self::Unsupported
+    }
+
+    fn graph_node_type(self) -> &'static str {
+        match self {
+            Self::Code => "file",
+            Self::Doc
+            | Self::OfficeDocument
+            | Self::Spreadsheet
+            | Self::Presentation
+            | Self::Pdf
+            | Self::Image
+            | Self::Media
+            | Self::Unsupported => "document",
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Code => "code",
+            Self::Doc => "document",
+            Self::OfficeDocument => "office_document",
+            Self::Spreadsheet => "spreadsheet",
+            Self::Presentation => "presentation",
+            Self::Pdf => "pdf",
+            Self::Image => "image",
+            Self::Media => "media",
+            Self::Unsupported => "unsupported",
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -131,6 +188,22 @@ struct RepositoryFile {
     absolute_path: PathBuf,
     relative_path: String,
     kind: FileKind,
+}
+
+#[derive(Debug, Clone)]
+pub struct RepositoryFilePayload {
+    pub path: String,
+    pub content: Option<String>,
+    pub bytes: Option<Vec<u8>>,
+    pub media_type: Option<String>,
+    pub size_bytes: Option<u64>,
+}
+
+#[derive(Debug, Clone)]
+struct ParsedRepositoryFile {
+    nodes: Vec<KnowledgeNode>,
+    edges: Vec<KnowledgeEdge>,
+    semantic_text: Option<String>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -185,12 +258,21 @@ pub fn build_repository_knowledge(
                 continue;
             }
         };
-        if meta.len() > MAX_FILE_SIZE_BYTES {
+        let max_size = if file.kind.is_binary() {
+            MAX_BINARY_FILE_SIZE_BYTES
+        } else {
+            MAX_FILE_SIZE_BYTES
+        };
+        if meta.len() > max_size {
+            if file.kind.is_binary() {
+                let extracted = extract_repository_file(file, &[], &known_files, Some(meta.len()));
+                nodes.extend(extracted.nodes);
+                edges.extend(extracted.edges);
+            }
             skipped_files += 1;
             continue;
         }
 
-        // Read as bytes first, then convert to UTF-8 — skip non-text files gracefully
         let bytes = match fs::read(&file.absolute_path) {
             Ok(b) => b,
             Err(_) => {
@@ -198,27 +280,17 @@ pub fn build_repository_knowledge(
                 continue;
             }
         };
-        let text = match String::from_utf8(bytes) {
-            Ok(s) => s,
-            Err(_) => {
-                skipped_files += 1;
-                continue;
-            }
-        };
 
-        match file.kind {
-            FileKind::Code => {
-                let extracted = extract_code_file(file, &text, &known_files);
-                nodes.extend(extracted.0);
-                edges.extend(extracted.1);
-            }
-            FileKind::Doc => {
-                let extracted = extract_document_file(file, &text, &known_files);
-                nodes.extend(extracted.0);
-                edges.extend(extracted.1);
-            }
+        let extracted = extract_repository_file(file, &bytes, &known_files, Some(meta.len()));
+        if extracted.nodes.is_empty() {
+            skipped_files += 1;
+            continue;
         }
-        semantic_inputs.push((file.relative_path.clone(), text));
+        nodes.extend(extracted.nodes);
+        edges.extend(extracted.edges);
+        if let Some(text) = extracted.semantic_text {
+            semantic_inputs.push((file.relative_path.clone(), text));
+        }
     }
 
     edges.extend(build_semantic_similarity_edges(&semantic_inputs));
@@ -295,16 +367,36 @@ pub fn build_repository_knowledge(
 pub struct SyncRules {
     pub code_extensions: Vec<String>,
     pub doc_extensions: Vec<String>,
+    pub binary_extensions: Vec<String>,
     pub ignore_dirs: Vec<String>,
     pub ignore_files: Vec<String>,
     pub ignore_patterns: Vec<String>,
     pub max_file_size_bytes: u64,
+    pub max_binary_file_size_bytes: u64,
 }
 
 pub fn sync_rules() -> SyncRules {
     SyncRules {
         code_extensions: CODE_EXTENSIONS.iter().map(|s| s.to_string()).collect(),
-        doc_extensions: DOC_EXTENSIONS.iter().map(|s| s.to_string()).collect(),
+        doc_extensions: DOC_EXTENSIONS
+            .iter()
+            .chain(OFFICE_DOCUMENT_EXTENSIONS)
+            .chain(SPREADSHEET_EXTENSIONS)
+            .chain(PRESENTATION_EXTENSIONS)
+            .chain(PDF_EXTENSIONS)
+            .chain(IMAGE_EXTENSIONS)
+            .chain(MEDIA_EXTENSIONS)
+            .map(|s| s.to_string())
+            .collect(),
+        binary_extensions: OFFICE_DOCUMENT_EXTENSIONS
+            .iter()
+            .chain(SPREADSHEET_EXTENSIONS)
+            .chain(PRESENTATION_EXTENSIONS)
+            .chain(PDF_EXTENSIONS)
+            .chain(IMAGE_EXTENSIONS)
+            .chain(MEDIA_EXTENSIONS)
+            .map(|s| s.to_string())
+            .collect(),
         ignore_dirs: IGNORE_DIRS.iter().map(|s| s.to_string()).collect(),
         ignore_files: IGNORE_FILES.iter().map(|s| s.to_string()).collect(),
         ignore_patterns: vec![
@@ -320,44 +412,68 @@ pub fn sync_rules() -> SyncRules {
             "*.generated.js".to_string(),
         ],
         max_file_size_bytes: MAX_FILE_SIZE_BYTES,
+        max_binary_file_size_bytes: MAX_BINARY_FILE_SIZE_BYTES,
     }
 }
 
 pub fn parse_file_batch(files: &[(String, String)]) -> (Vec<KnowledgeNode>, Vec<KnowledgeEdge>) {
-    let known_files: HashSet<String> = files.iter().map(|(path, _)| path.clone()).collect();
+    let payloads = files
+        .iter()
+        .map(|(path, content)| RepositoryFilePayload {
+            path: path.clone(),
+            content: Some(content.clone()),
+            bytes: None,
+            media_type: None,
+            size_bytes: Some(content.len() as u64),
+        })
+        .collect::<Vec<_>>();
+    parse_file_payload_batch(&payloads)
+}
+
+pub fn parse_file_payload_batch(
+    files: &[RepositoryFilePayload],
+) -> (Vec<KnowledgeNode>, Vec<KnowledgeEdge>) {
+    let known_files: HashSet<String> = files.iter().map(|file| file.path.clone()).collect();
 
     let mut nodes = Vec::new();
     let mut edges = Vec::new();
     let mut semantic_inputs = Vec::new();
 
-    for (path, content) in files {
-        if content.len() as u64 > MAX_FILE_SIZE_BYTES {
+    for payload in files {
+        let kind = classify_file_kind(Path::new(&payload.path)).unwrap_or(FileKind::Unsupported);
+        let bytes = if let Some(bytes) = &payload.bytes {
+            bytes.clone()
+        } else if let Some(content) = &payload.content {
+            content.as_bytes().to_vec()
+        } else {
+            Vec::new()
+        };
+        let size_bytes = payload.size_bytes.unwrap_or(bytes.len() as u64);
+        let max_size = if kind.is_binary() {
+            MAX_BINARY_FILE_SIZE_BYTES
+        } else {
+            MAX_FILE_SIZE_BYTES
+        };
+        if size_bytes > max_size && !kind.is_binary() {
             continue;
         }
 
-        let Some(kind) = classify_file_kind(Path::new(path)) else {
-            continue;
-        };
-
         let repo_file = RepositoryFile {
-            absolute_path: PathBuf::from(path),
-            relative_path: path.clone(),
+            absolute_path: PathBuf::from(&payload.path),
+            relative_path: payload.path.clone(),
             kind,
         };
 
-        match kind {
-            FileKind::Code => {
-                let extracted = extract_code_file(&repo_file, content, &known_files);
-                nodes.extend(extracted.0);
-                edges.extend(extracted.1);
-            }
-            FileKind::Doc => {
-                let extracted = extract_document_file(&repo_file, content, &known_files);
-                nodes.extend(extracted.0);
-                edges.extend(extracted.1);
-            }
+        let extracted = if size_bytes > max_size {
+            extract_repository_file(&repo_file, &[], &known_files, Some(size_bytes))
+        } else {
+            extract_repository_file(&repo_file, &bytes, &known_files, Some(size_bytes))
+        };
+        nodes.extend(extracted.nodes);
+        edges.extend(extracted.edges);
+        if let Some(text) = extracted.semantic_text {
+            semantic_inputs.push((payload.path.clone(), text));
         }
-        semantic_inputs.push((path.clone(), content.clone()));
     }
 
     edges.extend(build_semantic_similarity_edges(&semantic_inputs));
@@ -444,6 +560,18 @@ fn classify_file_kind(path: &Path) -> Option<FileKind> {
         Some(FileKind::Code)
     } else if DOC_EXTENSIONS.contains(&extension.as_str()) {
         Some(FileKind::Doc)
+    } else if OFFICE_DOCUMENT_EXTENSIONS.contains(&extension.as_str()) {
+        Some(FileKind::OfficeDocument)
+    } else if SPREADSHEET_EXTENSIONS.contains(&extension.as_str()) {
+        Some(FileKind::Spreadsheet)
+    } else if PRESENTATION_EXTENSIONS.contains(&extension.as_str()) {
+        Some(FileKind::Presentation)
+    } else if PDF_EXTENSIONS.contains(&extension.as_str()) {
+        Some(FileKind::Pdf)
+    } else if IMAGE_EXTENSIONS.contains(&extension.as_str()) {
+        Some(FileKind::Image)
+    } else if MEDIA_EXTENSIONS.contains(&extension.as_str()) {
+        Some(FileKind::Media)
     } else {
         None
     }
@@ -469,6 +597,54 @@ fn is_ignored_file(name: &str) -> bool {
         || name.ends_with(".generated.ts")
         || name.ends_with(".generated.js")
         || name.starts_with("__generated__")
+}
+
+fn extract_repository_file(
+    file: &RepositoryFile,
+    bytes: &[u8],
+    known_files: &HashSet<String>,
+    size_bytes: Option<u64>,
+) -> ParsedRepositoryFile {
+    if bytes.is_empty() && file.kind.is_binary() {
+        return metadata_only_file(
+            file,
+            "file exceeds binary parser size cap; metadata-only node emitted",
+            size_bytes,
+        );
+    }
+
+    match file.kind {
+        FileKind::Code | FileKind::Doc => match std::str::from_utf8(bytes) {
+            Ok(text) => {
+                let (nodes, edges) = if file.kind == FileKind::Code {
+                    extract_code_file(file, text, known_files)
+                } else {
+                    extract_document_file(file, text, known_files)
+                };
+                ParsedRepositoryFile {
+                    nodes,
+                    edges,
+                    semantic_text: Some(text.to_string()),
+                }
+            }
+            Err(error) => metadata_only_file(
+                file,
+                &format!("expected UTF-8 text but decoding failed: {error}"),
+                size_bytes,
+            ),
+        },
+        FileKind::OfficeDocument => extract_docx_file(file, bytes, known_files, size_bytes),
+        FileKind::Spreadsheet => extract_xlsx_file(file, bytes, size_bytes),
+        FileKind::Presentation => extract_pptx_file(file, bytes, size_bytes),
+        FileKind::Pdf => extract_pdf_file(file, bytes, size_bytes),
+        FileKind::Image => extract_image_file(file, bytes, size_bytes),
+        FileKind::Media => extract_media_file(file, bytes, size_bytes),
+        FileKind::Unsupported => metadata_only_file(
+            file,
+            "unsupported file extension; metadata-only node emitted",
+            size_bytes,
+        ),
+    }
 }
 
 fn extract_code_file(
@@ -943,6 +1119,315 @@ fn extract_document_file(
     (nodes, edges)
 }
 
+fn extract_docx_file(
+    file: &RepositoryFile,
+    bytes: &[u8],
+    known_files: &HashSet<String>,
+    size_bytes: Option<u64>,
+) -> ParsedRepositoryFile {
+    let mut diagnostics = Vec::new();
+    let mut markdown = String::new();
+    match read_zip_text_entries(
+        bytes,
+        |name| {
+            name == "word/document.xml"
+                || name.starts_with("word/header")
+                || name.starts_with("word/footer")
+        },
+        2_000_000,
+    ) {
+        Ok(entries) => {
+            for (name, xml) in entries {
+                let text = ooxml_text_to_markdown(&xml);
+                if !text.trim().is_empty() {
+                    markdown.push_str(&format!("\n\n## {name}\n{text}"));
+                }
+            }
+        }
+        Err(error) => diagnostics.push(format!("docx parse failed: {error}")),
+    }
+
+    if markdown.trim().is_empty() {
+        return metadata_only_file(
+            file,
+            diagnostics
+                .first()
+                .map(String::as_str)
+                .unwrap_or("docx contained no extractable text"),
+            size_bytes,
+        );
+    }
+
+    let pseudo_file = RepositoryFile {
+        absolute_path: file.absolute_path.clone(),
+        relative_path: file.relative_path.clone(),
+        kind: FileKind::Doc,
+    };
+    let (mut nodes, mut edges) = extract_document_file(&pseudo_file, &markdown, known_files);
+    attach_parser_metadata(&mut nodes, file, "docx-ooxml", size_bytes, &diagnostics);
+    attach_parser_metadata_to_edges(&mut edges, "docx-ooxml");
+    ParsedRepositoryFile {
+        nodes,
+        edges,
+        semantic_text: Some(markdown),
+    }
+}
+
+fn extract_xlsx_file(
+    file: &RepositoryFile,
+    bytes: &[u8],
+    size_bytes: Option<u64>,
+) -> ParsedRepositoryFile {
+    let mut nodes = vec![create_file_node(&file.relative_path, file.kind)];
+    let mut edges = Vec::new();
+    let mut diagnostics = Vec::new();
+    let shared_strings = read_xlsx_shared_strings(bytes).unwrap_or_else(|error| {
+        diagnostics.push(format!("shared string parse failed: {error}"));
+        Vec::new()
+    });
+    let mut markdown = String::new();
+
+    match read_zip_text_entries(
+        bytes,
+        |name| name.starts_with("xl/worksheets/sheet"),
+        3_000_000,
+    ) {
+        Ok(entries) => {
+            for (idx, (name, xml)) in entries.into_iter().enumerate() {
+                let sheet_name = format!("Sheet {}", idx + 1);
+                let sheet_id = format!(
+                    "section:{}:{}",
+                    file.relative_path,
+                    short_hash(name.as_bytes())
+                );
+                let text = xlsx_sheet_text(&xml, &shared_strings);
+                nodes.push(KnowledgeNode {
+                    id: sheet_id.clone(),
+                    label: sheet_name.clone(),
+                    node_type: "section".to_string(),
+                    source_type: "derived".to_string(),
+                    source_id: file.relative_path.clone(),
+                    metadata: json!({
+                        "sourceFile": file.relative_path,
+                        "parser": "xlsx-ooxml",
+                        "sheetSource": name,
+                        "repositoryFileKind": file.kind.label(),
+                    }),
+                    community_id: None,
+                });
+                edges.push(edge(
+                    format!("file:{}", file.relative_path),
+                    sheet_id,
+                    "contains",
+                    "extracted",
+                    1.0,
+                    json!({ "sourceFile": file.relative_path, "parser": "xlsx-ooxml" }),
+                ));
+                if !text.trim().is_empty() {
+                    markdown.push_str(&format!("\n\n## {sheet_name}\n{text}"));
+                }
+            }
+        }
+        Err(error) => diagnostics.push(format!("xlsx parse failed: {error}")),
+    }
+
+    attach_parser_metadata(&mut nodes, file, "xlsx-ooxml", size_bytes, &diagnostics);
+    if !diagnostics.is_empty() {
+        add_diagnostic_node(&mut nodes, &mut edges, file, &diagnostics.join("; "));
+    }
+    ParsedRepositoryFile {
+        nodes,
+        edges,
+        semantic_text: (!markdown.trim().is_empty()).then_some(markdown),
+    }
+}
+
+fn extract_pptx_file(
+    file: &RepositoryFile,
+    bytes: &[u8],
+    size_bytes: Option<u64>,
+) -> ParsedRepositoryFile {
+    let mut nodes = vec![create_file_node(&file.relative_path, file.kind)];
+    let mut edges = Vec::new();
+    let mut diagnostics = Vec::new();
+    let mut markdown = String::new();
+
+    match read_zip_text_entries(
+        bytes,
+        |name| name.starts_with("ppt/slides/slide"),
+        3_000_000,
+    ) {
+        Ok(entries) => {
+            for (idx, (name, xml)) in entries.into_iter().enumerate() {
+                let slide_label = format!("Slide {}", idx + 1);
+                let slide_id = format!(
+                    "section:{}:{}",
+                    file.relative_path,
+                    short_hash(name.as_bytes())
+                );
+                let text = ooxml_text_to_markdown(&xml);
+                nodes.push(KnowledgeNode {
+                    id: slide_id.clone(),
+                    label: slide_label.clone(),
+                    node_type: "section".to_string(),
+                    source_type: "derived".to_string(),
+                    source_id: file.relative_path.clone(),
+                    metadata: json!({
+                        "sourceFile": file.relative_path,
+                        "parser": "pptx-ooxml",
+                        "slideSource": name,
+                        "repositoryFileKind": file.kind.label(),
+                    }),
+                    community_id: None,
+                });
+                edges.push(edge(
+                    format!("file:{}", file.relative_path),
+                    slide_id,
+                    "contains",
+                    "extracted",
+                    1.0,
+                    json!({ "sourceFile": file.relative_path, "parser": "pptx-ooxml" }),
+                ));
+                if !text.trim().is_empty() {
+                    markdown.push_str(&format!("\n\n## {slide_label}\n{text}"));
+                }
+            }
+        }
+        Err(error) => diagnostics.push(format!("pptx parse failed: {error}")),
+    }
+
+    attach_parser_metadata(&mut nodes, file, "pptx-ooxml", size_bytes, &diagnostics);
+    if !diagnostics.is_empty() {
+        add_diagnostic_node(&mut nodes, &mut edges, file, &diagnostics.join("; "));
+    }
+    ParsedRepositoryFile {
+        nodes,
+        edges,
+        semantic_text: (!markdown.trim().is_empty()).then_some(markdown),
+    }
+}
+
+fn extract_pdf_file(
+    file: &RepositoryFile,
+    bytes: &[u8],
+    size_bytes: Option<u64>,
+) -> ParsedRepositoryFile {
+    let mut nodes = vec![create_file_node(&file.relative_path, file.kind)];
+    let mut edges = Vec::new();
+    let text = extract_pdf_text_best_effort(bytes);
+    attach_parser_metadata(&mut nodes, file, "pdf-best-effort", size_bytes, &[]);
+    if text.trim().is_empty() {
+        add_diagnostic_node(
+            &mut nodes,
+            &mut edges,
+            file,
+            "pdf parser found no plain text; OCR or a full PDF parser is required",
+        );
+        return ParsedRepositoryFile {
+            nodes,
+            edges,
+            semantic_text: None,
+        };
+    }
+
+    let page_id = format!("section:{}:pdf_text", file.relative_path);
+    nodes.push(KnowledgeNode {
+        id: page_id.clone(),
+        label: "PDF text".to_string(),
+        node_type: "section".to_string(),
+        source_type: "derived".to_string(),
+        source_id: file.relative_path.clone(),
+        metadata: json!({
+            "sourceFile": file.relative_path,
+            "parser": "pdf-best-effort",
+            "repositoryFileKind": file.kind.label(),
+        }),
+        community_id: None,
+    });
+    edges.push(edge(
+        format!("file:{}", file.relative_path),
+        page_id,
+        "contains",
+        "extracted",
+        0.7,
+        json!({ "sourceFile": file.relative_path, "parser": "pdf-best-effort" }),
+    ));
+    ParsedRepositoryFile {
+        nodes,
+        edges,
+        semantic_text: Some(text),
+    }
+}
+
+fn extract_image_file(
+    file: &RepositoryFile,
+    bytes: &[u8],
+    size_bytes: Option<u64>,
+) -> ParsedRepositoryFile {
+    let mut nodes = vec![create_file_node(&file.relative_path, file.kind)];
+    let mut edges = Vec::new();
+    let dimensions = image_dimensions(bytes);
+    let mut diagnostics = Vec::new();
+    if dimensions.is_none() {
+        diagnostics.push("image dimensions could not be decoded".to_string());
+        add_diagnostic_node(&mut nodes, &mut edges, file, &diagnostics[0]);
+    }
+    attach_parser_metadata(&mut nodes, file, "image-header", size_bytes, &diagnostics);
+    if let Some((width, height)) = dimensions {
+        if let Some(node) = nodes
+            .iter_mut()
+            .find(|node| node.id == format!("file:{}", file.relative_path))
+        {
+            merge_metadata(
+                &mut node.metadata,
+                &json!({ "width": width, "height": height, "needsVisionPass": true }),
+            );
+        }
+    }
+    ParsedRepositoryFile {
+        nodes,
+        edges,
+        semantic_text: Some(format!(
+            "{} image metadata: dimensions={:?}",
+            file.relative_path, dimensions
+        )),
+    }
+}
+
+fn extract_media_file(
+    file: &RepositoryFile,
+    bytes: &[u8],
+    size_bytes: Option<u64>,
+) -> ParsedRepositoryFile {
+    let mut nodes = vec![create_file_node(&file.relative_path, file.kind)];
+    let mut edges = Vec::new();
+    let metadata = media_metadata(bytes, &file.relative_path);
+    let mut diagnostics = Vec::new();
+    if metadata.is_empty() {
+        diagnostics
+            .push("media metadata could not be decoded; transcript job required".to_string());
+        add_diagnostic_node(&mut nodes, &mut edges, file, &diagnostics[0]);
+    }
+    attach_parser_metadata(&mut nodes, file, "media-header", size_bytes, &diagnostics);
+    if let Some(node) = nodes
+        .iter_mut()
+        .find(|node| node.id == format!("file:{}", file.relative_path))
+    {
+        merge_metadata(
+            &mut node.metadata,
+            &json!({ "media": metadata, "needsTranscriptPass": true }),
+        );
+    }
+    ParsedRepositoryFile {
+        nodes,
+        edges,
+        semantic_text: Some(format!(
+            "{} media metadata: {}",
+            file.relative_path, metadata
+        )),
+    }
+}
+
 fn build_semantic_similarity_edges(items: &[(String, String)]) -> Vec<KnowledgeEdge> {
     const MIN_TOKENS: usize = 10;
     /// Cap pairwise comparisons to avoid O(n²) blowup on large repos.
@@ -1156,13 +1641,17 @@ fn edge(
     weight: f64,
     metadata: serde_json::Value,
 ) -> KnowledgeEdge {
+    let source_file = metadata
+        .get("sourceFile")
+        .and_then(|value| value.as_str())
+        .map(String::from);
     KnowledgeEdge {
         source,
         target,
         relation: relation.to_string(),
         evidence: evidence.to_string(),
         weight,
-        source_file: None,
+        source_file,
         metadata,
     }
 }
@@ -1176,20 +1665,109 @@ fn create_file_node(relative_path: &str, kind: FileKind) -> KnowledgeNode {
     KnowledgeNode {
         id: format!("file:{relative_path}"),
         label: basename.clone(),
-        node_type: if kind == FileKind::Doc {
-            "document".to_string()
-        } else {
-            "file".to_string()
-        },
+        node_type: kind.graph_node_type().to_string(),
         source_type: "derived".to_string(),
         source_id: relative_path.to_string(),
         metadata: json!({
             "fullPath": relative_path,
             "basename": basename,
             "extension": extension,
+            "repositoryFileKind": kind.label(),
         }),
         community_id: None,
     }
+}
+
+fn metadata_only_file(
+    file: &RepositoryFile,
+    diagnostic: &str,
+    size_bytes: Option<u64>,
+) -> ParsedRepositoryFile {
+    let mut nodes = vec![create_file_node(&file.relative_path, file.kind)];
+    let mut edges = Vec::new();
+    attach_parser_metadata(
+        &mut nodes,
+        file,
+        "metadata-only",
+        size_bytes,
+        &[diagnostic.to_string()],
+    );
+    add_diagnostic_node(&mut nodes, &mut edges, file, diagnostic);
+    ParsedRepositoryFile {
+        nodes,
+        edges,
+        semantic_text: Some(format!("{}: {}", file.relative_path, diagnostic)),
+    }
+}
+
+fn attach_parser_metadata(
+    nodes: &mut [KnowledgeNode],
+    file: &RepositoryFile,
+    parser: &str,
+    size_bytes: Option<u64>,
+    diagnostics: &[String],
+) {
+    let file_id = format!("file:{}", file.relative_path);
+    for node in nodes {
+        let source_file = node
+            .metadata
+            .get("sourceFile")
+            .and_then(|value| value.as_str())
+            .unwrap_or(&file.relative_path);
+        if node.id == file_id || source_file == file.relative_path {
+            merge_metadata(
+                &mut node.metadata,
+                &json!({
+                    "sourceFile": file.relative_path,
+                    "parser": parser,
+                    "repositoryFileKind": file.kind.label(),
+                    "sizeBytes": size_bytes,
+                    "diagnostics": diagnostics,
+                }),
+            );
+        }
+    }
+}
+
+fn attach_parser_metadata_to_edges(edges: &mut [KnowledgeEdge], parser: &str) {
+    for edge_item in edges {
+        merge_metadata(&mut edge_item.metadata, &json!({ "parser": parser }));
+    }
+}
+
+fn add_diagnostic_node(
+    nodes: &mut Vec<KnowledgeNode>,
+    edges: &mut Vec<KnowledgeEdge>,
+    file: &RepositoryFile,
+    diagnostic: &str,
+) {
+    let diagnostic_id = format!(
+        "section:{}:diagnostic:{}",
+        file.relative_path,
+        short_hash(diagnostic.as_bytes())
+    );
+    nodes.push(KnowledgeNode {
+        id: diagnostic_id.clone(),
+        label: truncate(diagnostic, 80),
+        node_type: "section".to_string(),
+        source_type: "derived".to_string(),
+        source_id: file.relative_path.clone(),
+        metadata: json!({
+            "sourceFile": file.relative_path,
+            "parser": "diagnostic",
+            "diagnostic": diagnostic,
+            "repositoryFileKind": file.kind.label(),
+        }),
+        community_id: None,
+    });
+    edges.push(edge(
+        format!("file:{}", file.relative_path),
+        diagnostic_id,
+        "contains",
+        "ambiguous",
+        0.3,
+        json!({ "sourceFile": file.relative_path, "parser": "diagnostic" }),
+    ));
 }
 
 fn resolve_import(
@@ -1267,6 +1845,312 @@ fn jaccard_similarity(left: &BTreeSet<String>, right: &BTreeSet<String>) -> f64 
     }
 }
 
+fn read_zip_text_entries<F>(
+    bytes: &[u8],
+    include: F,
+    max_total_bytes: usize,
+) -> Result<Vec<(String, String)>, String>
+where
+    F: Fn(&str) -> bool,
+{
+    let cursor = Cursor::new(bytes);
+    let mut archive = zip::ZipArchive::new(cursor).map_err(|error| error.to_string())?;
+    let mut total = 0usize;
+    let mut entries = Vec::new();
+    for index in 0..archive.len() {
+        let mut file = archive.by_index(index).map_err(|error| error.to_string())?;
+        let name = file.name().to_string();
+        if !include(&name) {
+            continue;
+        }
+        total = total.saturating_add(file.size() as usize);
+        if total > max_total_bytes {
+            return Err("zip text extraction exceeded parser byte budget".to_string());
+        }
+        let mut text = String::new();
+        file.read_to_string(&mut text)
+            .map_err(|error| error.to_string())?;
+        entries.push((name, text));
+    }
+    Ok(entries)
+}
+
+fn read_xlsx_shared_strings(bytes: &[u8]) -> Result<Vec<String>, String> {
+    let entries = read_zip_text_entries(bytes, |name| name == "xl/sharedStrings.xml", 2_000_000)?;
+    let Some((_, xml)) = entries.into_iter().next() else {
+        return Ok(Vec::new());
+    };
+    let item_pattern = Regex::new(r"(?s)<si\b[^>]*>(.*?)</si>").unwrap();
+    Ok(item_pattern
+        .captures_iter(&xml)
+        .filter_map(|captures| captures.get(1).map(|value| xml_text(value.as_str())))
+        .filter(|value| !value.trim().is_empty())
+        .collect())
+}
+
+fn xlsx_sheet_text(xml: &str, shared_strings: &[String]) -> String {
+    let cell_pattern =
+        Regex::new(r#"(?s)<c\b[^>]*?(?:t="(?P<t>[^"]+)")?[^>]*>(?P<body>.*?)</c>"#).unwrap();
+    let value_pattern = Regex::new(r"(?s)<v>(.*?)</v>").unwrap();
+    let inline_pattern = Regex::new(r"(?s)<is\b[^>]*>(.*?)</is>").unwrap();
+    let mut values = Vec::new();
+
+    for captures in cell_pattern.captures_iter(xml) {
+        let cell_type = captures.name("t").map(|value| value.as_str()).unwrap_or("");
+        let body = captures
+            .name("body")
+            .map(|value| value.as_str())
+            .unwrap_or("");
+        let value = if cell_type == "s" {
+            value_pattern
+                .captures(body)
+                .and_then(|inner| inner.get(1))
+                .and_then(|index| index.as_str().parse::<usize>().ok())
+                .and_then(|index| shared_strings.get(index).cloned())
+        } else if cell_type == "inlineStr" {
+            inline_pattern
+                .captures(body)
+                .and_then(|inner| inner.get(1))
+                .map(|value| xml_text(value.as_str()))
+        } else {
+            value_pattern
+                .captures(body)
+                .and_then(|inner| inner.get(1))
+                .map(|value| decode_xml_entities(value.as_str()))
+        };
+        if let Some(value) = value {
+            let trimmed = value.trim();
+            if !trimmed.is_empty() {
+                values.push(trimmed.to_string());
+            }
+        }
+    }
+
+    values.join("\n")
+}
+
+fn ooxml_text_to_markdown(xml: &str) -> String {
+    let paragraphized = Regex::new(r"</(?:w:p|a:p|w:tr|a:tr)>")
+        .unwrap()
+        .replace_all(xml, "\n");
+    xml_text(&paragraphized)
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn xml_text(xml: &str) -> String {
+    let without_tags = Regex::new(r"(?s)<[^>]+>").unwrap().replace_all(xml, " ");
+    collapse_ws(&decode_xml_entities(&without_tags))
+}
+
+fn decode_xml_entities(value: &str) -> String {
+    value
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&amp;", "&")
+        .replace("&quot;", "\"")
+        .replace("&apos;", "'")
+}
+
+fn collapse_ws(value: &str) -> String {
+    Regex::new(r"[ \t\r\f]+")
+        .unwrap()
+        .replace_all(value, " ")
+        .trim()
+        .to_string()
+}
+
+fn extract_pdf_text_best_effort(bytes: &[u8]) -> String {
+    if !bytes.starts_with(b"%PDF") {
+        return String::new();
+    }
+    let lossy = String::from_utf8_lossy(bytes);
+    let literal_pattern = Regex::new(r#"\(([^()\r\n]{2,500})\)\s*T[Jj]"#).unwrap();
+    let bracket_pattern = Regex::new(r#"\[((?:\([^()\r\n]{1,200}\)\s*)+)\]\s*TJ"#).unwrap();
+    let paren_pattern = Regex::new(r#"\(([^()\r\n]{1,200})\)"#).unwrap();
+    let mut lines = Vec::new();
+    for captures in literal_pattern.captures_iter(&lossy) {
+        if let Some(value) = captures.get(1) {
+            lines.push(unescape_pdf_literal(value.as_str()));
+        }
+    }
+    for captures in bracket_pattern.captures_iter(&lossy) {
+        if let Some(group) = captures.get(1) {
+            let mut line = String::new();
+            for piece in paren_pattern.captures_iter(group.as_str()) {
+                if let Some(value) = piece.get(1) {
+                    line.push_str(&unescape_pdf_literal(value.as_str()));
+                }
+            }
+            if !line.trim().is_empty() {
+                lines.push(line);
+            }
+        }
+    }
+    lines
+        .into_iter()
+        .map(|line| collapse_ws(&line))
+        .filter(|line| line.chars().any(|ch| ch.is_alphanumeric()))
+        .take(2_000)
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn unescape_pdf_literal(value: &str) -> String {
+    value
+        .replace(r"\(", "(")
+        .replace(r"\)", ")")
+        .replace(r"\\", "\\")
+        .replace(r"\n", "\n")
+        .replace(r"\r", "\n")
+        .replace(r"\t", "\t")
+}
+
+fn image_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
+    if bytes.len() >= 24 && bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
+        return Some((
+            u32::from_be_bytes(bytes[16..20].try_into().ok()?),
+            u32::from_be_bytes(bytes[20..24].try_into().ok()?),
+        ));
+    }
+    if bytes.len() >= 10 && bytes.starts_with(b"GIF8") {
+        return Some((
+            u16::from_le_bytes(bytes[6..8].try_into().ok()?) as u32,
+            u16::from_le_bytes(bytes[8..10].try_into().ok()?) as u32,
+        ));
+    }
+    if bytes.len() >= 30 && bytes.starts_with(b"RIFF") && bytes.get(8..12) == Some(b"WEBP") {
+        if bytes.get(12..16) == Some(b"VP8X") && bytes.len() >= 30 {
+            let width = 1 + u32::from_le_bytes([bytes[24], bytes[25], bytes[26], 0]);
+            let height = 1 + u32::from_le_bytes([bytes[27], bytes[28], bytes[29], 0]);
+            return Some((width, height));
+        }
+        if bytes.get(12..16) == Some(b"VP8 ") && bytes.len() >= 30 {
+            return Some((
+                u16::from_le_bytes(bytes[26..28].try_into().ok()?) as u32 & 0x3fff,
+                u16::from_le_bytes(bytes[28..30].try_into().ok()?) as u32 & 0x3fff,
+            ));
+        }
+    }
+    jpeg_dimensions(bytes)
+}
+
+fn jpeg_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
+    if bytes.len() < 4 || bytes[0] != 0xff || bytes[1] != 0xd8 {
+        return None;
+    }
+    let mut offset = 2usize;
+    while offset + 9 < bytes.len() {
+        if bytes[offset] != 0xff {
+            offset += 1;
+            continue;
+        }
+        let marker = bytes[offset + 1];
+        offset += 2;
+        if marker == 0xd8 || marker == 0xd9 {
+            continue;
+        }
+        if offset + 2 > bytes.len() {
+            return None;
+        }
+        let len = u16::from_be_bytes(bytes[offset..offset + 2].try_into().ok()?) as usize;
+        if len < 2 || offset + len > bytes.len() {
+            return None;
+        }
+        if matches!(marker, 0xc0..=0xc3 | 0xc5..=0xc7 | 0xc9..=0xcb | 0xcd..=0xcf) {
+            let height = u16::from_be_bytes(bytes[offset + 3..offset + 5].try_into().ok()?) as u32;
+            let width = u16::from_be_bytes(bytes[offset + 5..offset + 7].try_into().ok()?) as u32;
+            return Some((width, height));
+        }
+        offset += len;
+    }
+    None
+}
+
+fn media_metadata(bytes: &[u8], path: &str) -> String {
+    let extension = Path::new(path)
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    match extension.as_str() {
+        "wav" => wav_metadata(bytes),
+        "mp4" | "mov" | "m4v" => mp4_metadata(bytes),
+        "mp3" => mp3_metadata(bytes),
+        _ => String::new(),
+    }
+}
+
+fn wav_metadata(bytes: &[u8]) -> String {
+    if bytes.len() < 44 || bytes.get(0..4) != Some(b"RIFF") || bytes.get(8..12) != Some(b"WAVE") {
+        return String::new();
+    }
+    let sample_rate = u32::from_le_bytes(bytes[24..28].try_into().unwrap_or([0; 4]));
+    let byte_rate = u32::from_le_bytes(bytes[28..32].try_into().unwrap_or([0; 4]));
+    let mut data_size = 0u32;
+    let mut offset = 12usize;
+    while offset + 8 <= bytes.len() {
+        let chunk_id = &bytes[offset..offset + 4];
+        let chunk_size =
+            u32::from_le_bytes(bytes[offset + 4..offset + 8].try_into().unwrap_or([0; 4]));
+        if chunk_id == b"data" {
+            data_size = chunk_size;
+            break;
+        }
+        offset = offset.saturating_add(8).saturating_add(chunk_size as usize);
+    }
+    let duration = if byte_rate > 0 {
+        data_size as f64 / byte_rate as f64
+    } else {
+        0.0
+    };
+    format!("format=wav sampleRate={sample_rate} durationSeconds={duration:.2}")
+}
+
+fn mp3_metadata(bytes: &[u8]) -> String {
+    if bytes.starts_with(b"ID3") {
+        let version = bytes.get(3).copied().unwrap_or_default();
+        format!("format=mp3 id3Version=2.{version}")
+    } else if bytes.starts_with(&[0xff, 0xfb]) || bytes.starts_with(&[0xff, 0xf3]) {
+        "format=mp3 mpegAudioFrame=true".to_string()
+    } else {
+        String::new()
+    }
+}
+
+fn mp4_metadata(bytes: &[u8]) -> String {
+    if bytes.len() < 12 {
+        return String::new();
+    }
+    let brand = bytes
+        .windows(4)
+        .position(|window| window == b"ftyp")
+        .and_then(|pos| bytes.get(pos + 4..pos + 8))
+        .map(|slice| String::from_utf8_lossy(slice).to_string())
+        .unwrap_or_else(|| "unknown".to_string());
+    let duration = mp4_duration_seconds(bytes)
+        .map(|value| format!(" durationSeconds={value:.2}"))
+        .unwrap_or_default();
+    format!("format=mp4 brand={brand}{duration}")
+}
+
+fn mp4_duration_seconds(bytes: &[u8]) -> Option<f64> {
+    let pos = bytes.windows(4).position(|window| window == b"mvhd")?;
+    let version = *bytes.get(pos + 4)?;
+    if version == 1 {
+        let timescale = u32::from_be_bytes(bytes.get(pos + 20..pos + 24)?.try_into().ok()?);
+        let duration = u64::from_be_bytes(bytes.get(pos + 24..pos + 32)?.try_into().ok()?);
+        (timescale > 0).then_some(duration as f64 / timescale as f64)
+    } else {
+        let timescale = u32::from_be_bytes(bytes.get(pos + 12..pos + 16)?.try_into().ok()?);
+        let duration = u32::from_be_bytes(bytes.get(pos + 16..pos + 20)?.try_into().ok()?);
+        (timescale > 0).then_some(duration as f64 / timescale as f64)
+    }
+}
+
 fn render_graph_html(graph: &KnowledgeGraph) -> String {
     format!(
         "<!doctype html><html><head><meta charset=\"utf-8\"><title>Graph</title></head><body><pre id=\"graph\">{}</pre></body></html>",
@@ -1333,6 +2217,20 @@ fn rfc3339_now() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Write;
+
+    fn zip_bytes(entries: &[(&str, &str)]) -> Vec<u8> {
+        let cursor = Cursor::new(Vec::new());
+        let mut writer = zip::ZipWriter::new(cursor);
+        let options = zip::write::SimpleFileOptions::default();
+        for (name, content) in entries {
+            writer.start_file(name, options).expect("start zip file");
+            writer
+                .write_all(content.as_bytes())
+                .expect("write zip entry");
+        }
+        writer.finish().expect("finish zip").into_inner()
+    }
 
     #[test]
     fn extracts_repository_code_and_docs() {
@@ -1392,6 +2290,150 @@ mod tests {
         );
 
         fs::remove_dir_all(&temp_root).expect("remove temp root");
+    }
+
+    #[test]
+    fn parses_graphify_style_binary_repository_payloads() {
+        let docx = zip_bytes(&[(
+            "word/document.xml",
+            r#"<w:document><w:body><w:p><w:r><w:t>Repository roadmap</w:t></w:r></w:p></w:body></w:document>"#,
+        )]);
+        let xlsx = zip_bytes(&[
+            (
+                "xl/sharedStrings.xml",
+                r#"<sst><si><t>Metric</t></si><si><t>Latency</t></si></sst>"#,
+            ),
+            (
+                "xl/worksheets/sheet1.xml",
+                r#"<worksheet><sheetData><row><c t="s"><v>0</v></c><c t="s"><v>1</v></c></row></sheetData></worksheet>"#,
+            ),
+        ]);
+        let pptx = zip_bytes(&[(
+            "ppt/slides/slide1.xml",
+            r#"<p:sld><p:cSld><a:p><a:r><a:t>Launch plan</a:t></a:r></a:p></p:cSld></p:sld>"#,
+        )]);
+        let pdf = b"%PDF-1.4\nBT\n(Proof carrying context) Tj\nET\n%%EOF".to_vec();
+        let mut png = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR".to_vec();
+        png.extend_from_slice(&32u32.to_be_bytes());
+        png.extend_from_slice(&16u32.to_be_bytes());
+        png.extend_from_slice(&[8, 2, 0, 0, 0]);
+        let mut wav = vec![0u8; 44];
+        wav[0..4].copy_from_slice(b"RIFF");
+        wav[8..12].copy_from_slice(b"WAVE");
+        wav[24..28].copy_from_slice(&48_000u32.to_le_bytes());
+        wav[28..32].copy_from_slice(&96_000u32.to_le_bytes());
+        wav[36..40].copy_from_slice(b"data");
+        wav[40..44].copy_from_slice(&96_000u32.to_le_bytes());
+
+        let payloads = vec![
+            RepositoryFilePayload {
+                path: "docs/roadmap.docx".to_string(),
+                content: None,
+                bytes: Some(docx),
+                media_type: Some(
+                    "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                        .to_string(),
+                ),
+                size_bytes: None,
+            },
+            RepositoryFilePayload {
+                path: "data/metrics.xlsx".to_string(),
+                content: None,
+                bytes: Some(xlsx),
+                media_type: Some(
+                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet".to_string(),
+                ),
+                size_bytes: None,
+            },
+            RepositoryFilePayload {
+                path: "slides/plan.pptx".to_string(),
+                content: None,
+                bytes: Some(pptx),
+                media_type: Some(
+                    "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+                        .to_string(),
+                ),
+                size_bytes: None,
+            },
+            RepositoryFilePayload {
+                path: "papers/context.pdf".to_string(),
+                content: None,
+                bytes: Some(pdf),
+                media_type: Some("application/pdf".to_string()),
+                size_bytes: None,
+            },
+            RepositoryFilePayload {
+                path: "assets/logo.png".to_string(),
+                content: None,
+                bytes: Some(png),
+                media_type: Some("image/png".to_string()),
+                size_bytes: None,
+            },
+            RepositoryFilePayload {
+                path: "media/brief.wav".to_string(),
+                content: None,
+                bytes: Some(wav),
+                media_type: Some("audio/wav".to_string()),
+                size_bytes: None,
+            },
+        ];
+
+        let (nodes, edges) = parse_file_payload_batch(&payloads);
+
+        for path in [
+            "docs/roadmap.docx",
+            "data/metrics.xlsx",
+            "slides/plan.pptx",
+            "papers/context.pdf",
+            "assets/logo.png",
+            "media/brief.wav",
+        ] {
+            assert!(
+                nodes
+                    .iter()
+                    .any(|node| node.id == format!("file:{path}") && node.node_type == "document"),
+                "missing document node for {path}"
+            );
+        }
+
+        assert!(nodes.iter().any(
+            |node| node.metadata.get("parser").and_then(|value| value.as_str())
+                == Some("docx-ooxml")
+        ));
+        assert!(nodes.iter().any(
+            |node| node.metadata.get("parser").and_then(|value| value.as_str())
+                == Some("xlsx-ooxml")
+        ));
+        assert!(nodes.iter().any(
+            |node| node.metadata.get("parser").and_then(|value| value.as_str())
+                == Some("pptx-ooxml")
+        ));
+        assert!(edges.iter().any(|edge| edge.relation == "contains"
+            && edge.source == "file:papers/context.pdf"));
+        let image = nodes
+            .iter()
+            .find(|node| node.id == "file:assets/logo.png")
+            .expect("image node");
+        assert_eq!(
+            image.metadata.get("width").and_then(|v| v.as_u64()),
+            Some(32)
+        );
+        assert_eq!(
+            image.metadata.get("height").and_then(|v| v.as_u64()),
+            Some(16)
+        );
+        let media = nodes
+            .iter()
+            .find(|node| node.id == "file:media/brief.wav")
+            .expect("media node");
+        assert!(
+            media
+                .metadata
+                .get("media")
+                .and_then(|value| value.as_str())
+                .unwrap_or_default()
+                .contains("format=wav")
+        );
     }
 
     #[test]

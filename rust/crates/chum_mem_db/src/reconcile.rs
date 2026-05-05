@@ -125,9 +125,7 @@ pub async fn reconcile_claim_state_for_claims(
             authority_class: row.try_get("authority_class")?,
             verification_status: row.try_get("verification_status")?,
         };
-        outcome.merge(
-            reconcile_single_claim(tx, context, project_id, &current).await?,
-        );
+        outcome.merge(reconcile_single_claim(tx, context, project_id, &current).await?);
     }
 
     Ok(outcome)
@@ -194,7 +192,9 @@ async fn reconcile_single_claim(
         let prior_authority_str: Option<String> = row.try_get("authority_class")?;
         let prior_verification_str: Option<String> = row.try_get("verification_status")?;
         let prior_memory_type = parse_memory_type(&prior_type);
-        let prior_authority = prior_authority_str.as_deref().and_then(parse_authority_class);
+        let prior_authority = prior_authority_str
+            .as_deref()
+            .and_then(parse_authority_class);
         let prior_verification = prior_verification_str
             .as_deref()
             .and_then(parse_verification_status);

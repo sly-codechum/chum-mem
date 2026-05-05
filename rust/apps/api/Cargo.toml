@@ -8,6 +8,7 @@ version.workspace = true
 [dependencies]
 anyhow.workspace = true
 axum.workspace = true
+base64.workspace = true
 chum-mem-app = { path = "../../crates/chum_mem_app" }
 chum-mem-config = { path = "../../crates/chum_mem_config" }
 chum-mem-contracts = { path = "../../crates/chum_mem_contracts" }

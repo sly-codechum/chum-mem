@@ -226,10 +226,7 @@ pub fn extract_ast(extension: &str, source: &str) -> Option<AstExtraction> {
     let rationales = extract_rationales(root, bytes);
 
     // v2.2.2: Extract arrow functions / const exports (JS/TS)
-    if matches!(
-        lang,
-        Lang::JavaScript | Lang::TypeScript | Lang::Tsx
-    ) {
+    if matches!(lang, Lang::JavaScript | Lang::TypeScript | Lang::Tsx) {
         extract_arrow_functions(root, bytes, &mut symbols);
     }
 
@@ -1244,12 +1241,7 @@ fn walk_containment_and_docs(
 
 /// Populate `return_type` and `param_types` on function/method symbols by
 /// walking the tree-sitter AST and matching nodes by line number.
-fn populate_type_signatures(
-    lang: Lang,
-    root: Node,
-    source: &[u8],
-    symbols: &mut [AstSymbol],
-) {
+fn populate_type_signatures(lang: Lang, root: Node, source: &[u8], symbols: &mut [AstSymbol]) {
     if symbols.is_empty() {
         return;
     }
@@ -1334,8 +1326,13 @@ fn extract_return_type(lang: Lang, node: Node, source: &[u8]) -> Option<String> 
         }
         Lang::TypeScript | Lang::Tsx => {
             // TS: return_type is a "type_annotation" child
-            node.child_by_field_name("return_type")
-                .map(|n| n.utf8_text(source).unwrap_or_default().trim_start_matches(':').trim().to_string())
+            node.child_by_field_name("return_type").map(|n| {
+                n.utf8_text(source)
+                    .unwrap_or_default()
+                    .trim_start_matches(':')
+                    .trim()
+                    .to_string()
+            })
         }
         Lang::Python => {
             // Python: function_definition → return_type child
@@ -1370,7 +1367,9 @@ fn extract_param_types(lang: Lang, node: Node, source: &[u8]) -> Vec<(String, St
     };
     let mut result = Vec::new();
     for i in 0..params.child_count() {
-        let Some(child) = params.child(i) else { continue };
+        let Some(child) = params.child(i) else {
+            continue;
+        };
         let ck = child.kind();
         // Skip punctuation (commas, parens)
         if ck == "," || ck == "(" || ck == ")" {
@@ -1388,28 +1387,39 @@ fn extract_single_param(lang: Lang, node: Node, source: &[u8]) -> (String, Strin
     match lang {
         Lang::Rust => {
             // parameter → pattern: type
-            let name = node.child_by_field_name("pattern")
+            let name = node
+                .child_by_field_name("pattern")
                 .map(|n| n.utf8_text(source).unwrap_or_default().to_string())
                 .unwrap_or_default();
-            let ty = node.child_by_field_name("type")
+            let ty = node
+                .child_by_field_name("type")
                 .map(|n| n.utf8_text(source).unwrap_or_default().to_string())
                 .unwrap_or_default();
             (name, ty)
         }
         Lang::TypeScript | Lang::Tsx => {
             // required_parameter | optional_parameter → pattern + type_annotation
-            let name = node.child_by_field_name("pattern")
+            let name = node
+                .child_by_field_name("pattern")
                 .or_else(|| node.child_by_field_name("name"))
                 .map(|n| n.utf8_text(source).unwrap_or_default().to_string())
                 .unwrap_or_default();
-            let ty = node.child_by_field_name("type")
-                .map(|n| n.utf8_text(source).unwrap_or_default().trim_start_matches(':').trim().to_string())
+            let ty = node
+                .child_by_field_name("type")
+                .map(|n| {
+                    n.utf8_text(source)
+                        .unwrap_or_default()
+                        .trim_start_matches(':')
+                        .trim()
+                        .to_string()
+                })
                 .unwrap_or_default();
             (name, ty)
         }
         Lang::Python => {
             // typed_parameter or identifier; type in annotation child
-            let name = node.child_by_field_name("name")
+            let name = node
+                .child_by_field_name("name")
                 .or_else(|| {
                     // Simple identifier parameter
                     if node.kind() == "identifier" {
@@ -1420,26 +1430,31 @@ fn extract_single_param(lang: Lang, node: Node, source: &[u8]) -> (String, Strin
                 })
                 .map(|n| n.utf8_text(source).unwrap_or_default().to_string())
                 .unwrap_or_default();
-            let ty = node.child_by_field_name("type")
+            let ty = node
+                .child_by_field_name("type")
                 .map(|n| n.utf8_text(source).unwrap_or_default().to_string())
                 .unwrap_or_default();
             (name, ty)
         }
         Lang::Go => {
             // parameter_declaration → name type
-            let name = node.child_by_field_name("name")
+            let name = node
+                .child_by_field_name("name")
                 .map(|n| n.utf8_text(source).unwrap_or_default().to_string())
                 .unwrap_or_default();
-            let ty = node.child_by_field_name("type")
+            let ty = node
+                .child_by_field_name("type")
                 .map(|n| n.utf8_text(source).unwrap_or_default().to_string())
                 .unwrap_or_default();
             (name, ty)
         }
         Lang::Java | Lang::Kotlin => {
-            let name = node.child_by_field_name("name")
+            let name = node
+                .child_by_field_name("name")
                 .map(|n| n.utf8_text(source).unwrap_or_default().to_string())
                 .unwrap_or_default();
-            let ty = node.child_by_field_name("type")
+            let ty = node
+                .child_by_field_name("type")
                 .map(|n| n.utf8_text(source).unwrap_or_default().to_string())
                 .unwrap_or_default();
             (name, ty)
@@ -1455,18 +1470,30 @@ fn is_container_node(lang: Lang, kind: &str) -> bool {
         Lang::TypeScript | Lang::Tsx | Lang::JavaScript => {
             matches!(kind, "class_declaration" | "class")
         }
-        Lang::Rust => matches!(kind, "struct_item" | "enum_item" | "trait_item" | "impl_item"),
+        Lang::Rust => matches!(
+            kind,
+            "struct_item" | "enum_item" | "trait_item" | "impl_item"
+        ),
         Lang::Go => matches!(kind, "type_declaration"),
         Lang::Java | Lang::Kotlin | Lang::Swift => {
-            matches!(kind, "class_declaration" | "interface_declaration" | "enum_declaration")
+            matches!(
+                kind,
+                "class_declaration" | "interface_declaration" | "enum_declaration"
+            )
         }
         Lang::CSharp => matches!(
             kind,
-            "class_declaration" | "struct_declaration" | "interface_declaration" | "enum_declaration"
+            "class_declaration"
+                | "struct_declaration"
+                | "interface_declaration"
+                | "enum_declaration"
         ),
         Lang::Cpp => matches!(kind, "class_specifier" | "struct_specifier"),
         Lang::Ruby => matches!(kind, "class" | "module"),
-        Lang::Scala => matches!(kind, "class_definition" | "trait_definition" | "object_definition"),
+        Lang::Scala => matches!(
+            kind,
+            "class_definition" | "trait_definition" | "object_definition"
+        ),
         Lang::Php => matches!(kind, "class_declaration" | "interface_declaration"),
         _ => false,
     }
@@ -2291,7 +2318,11 @@ fn free_function() {}
         let ext = extract_ast("rs", source).unwrap();
         let method_a = ext.symbols.iter().find(|s| s.name == "method_a").unwrap();
         assert_eq!(method_a.parent_name.as_deref(), Some("MyStruct"));
-        let free_fn = ext.symbols.iter().find(|s| s.name == "free_function").unwrap();
+        let free_fn = ext
+            .symbols
+            .iter()
+            .find(|s| s.name == "free_function")
+            .unwrap();
         assert!(free_fn.parent_name.is_none());
     }
 
@@ -2305,9 +2336,18 @@ function normalFunc() {}
 "#;
         let ext = extract_ast("js", source).unwrap();
         let names: Vec<&str> = ext.symbols.iter().map(|s| s.name.as_str()).collect();
-        assert!(names.contains(&"handler"), "should extract arrow function: {names:?}");
-        assert!(names.contains(&"processData"), "should extract function expression: {names:?}");
-        assert!(names.contains(&"normalFunc"), "should still extract normal functions: {names:?}");
+        assert!(
+            names.contains(&"handler"),
+            "should extract arrow function: {names:?}"
+        );
+        assert!(
+            names.contains(&"processData"),
+            "should extract function expression: {names:?}"
+        );
+        assert!(
+            names.contains(&"normalFunc"),
+            "should still extract normal functions: {names:?}"
+        );
     }
 
     #[test]
@@ -2321,9 +2361,18 @@ function regularFn(): void {}
 "#;
         let ext = extract_ast("ts", source).unwrap();
         let names: Vec<&str> = ext.symbols.iter().map(|s| s.name.as_str()).collect();
-        assert!(names.contains(&"fetchUser"), "should extract async arrow: {names:?}");
-        assert!(names.contains(&"validate"), "should extract arrow: {names:?}");
-        assert!(names.contains(&"regularFn"), "should extract regular fn: {names:?}");
+        assert!(
+            names.contains(&"fetchUser"),
+            "should extract async arrow: {names:?}"
+        );
+        assert!(
+            names.contains(&"validate"),
+            "should extract arrow: {names:?}"
+        );
+        assert!(
+            names.contains(&"regularFn"),
+            "should extract regular fn: {names:?}"
+        );
     }
 
     #[test]
@@ -2336,9 +2385,19 @@ fn process_data() {}
 fn other_fn() {}
 "#;
         let ext = extract_ast("rs", source).unwrap();
-        let process = ext.symbols.iter().find(|s| s.name == "process_data").unwrap();
+        let process = ext
+            .symbols
+            .iter()
+            .find(|s| s.name == "process_data")
+            .unwrap();
         assert!(process.doc_comment.is_some(), "should extract doc comment");
-        assert!(process.doc_comment.as_ref().unwrap().contains("Processes data"));
+        assert!(
+            process
+                .doc_comment
+                .as_ref()
+                .unwrap()
+                .contains("Processes data")
+        );
     }
 
     // ── v2.2.2: Type signature extraction tests ──

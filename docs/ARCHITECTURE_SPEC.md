@@ -4,7 +4,7 @@
 
 `chum-mem` is a multi-tenant persistent memory system for coding agents. It ingests normalized provider events from Claude, Codex, and Gemini clients, derives typed durable claims with proof, stores them in PostgreSQL-backed tenant-safe data structures, and serves compact evidence through MCP tools and API endpoints.
 
-The current target architecture is v2.2.2 PCKC:
+The current target architecture is v2.2.3 PCKC:
 
 - claims are the unit of memory
 - proof is the unit of trust
@@ -149,6 +149,17 @@ There are two context assembly paths:
 
 - `context_build`: compact context packing
 - `context_compile_v2`: proof-disciplined minimal cover with hard token ceilings and `proof_gap` signaling
+
+### 5.4 Retrieval prelude
+
+Client agents must build repository context before memory recall:
+
+1. retrieve the repository `knowledge_report` in Markdown form
+2. run a repository-layer `knowledge_query` for relevant components, architecture, and relationships
+3. run compact `mem_search`
+4. only then use targeted file reads or file-level search
+
+This preserves the PCKC v2.2.3 model by anchoring work in repository graph truth before claim recall and proof expansion.
 
 ## 6. Multi-tenant model
 
@@ -353,6 +364,12 @@ The repository layer is AST-derived and should include:
 - cross-file calls
 - documentation structure
 - rationale/comment nodes where supported
+- Graphify-style multimodal repository artifacts:
+  - text/markup sections from `.md`, `.mdx`, `.html`, `.txt`, `.rst`, `.yaml`, and `.yml`
+  - Office Open XML text units from `.docx`, `.xlsx`, and `.pptx`
+  - best-effort PDF text units
+  - image/media metadata nodes for `.png`, `.jpg`, `.webp`, `.gif`, `.mp4`, `.mov`, `.mp3`, and `.wav`
+  - parse diagnostic nodes for corrupt, unsupported, or metadata-only files
 
 v2.2.2 repository expectations:
 
@@ -474,10 +491,11 @@ Operational guidance:
 
 Default retrieval workflow:
 
-1. `knowledge_query(search, layer:"repository")` and `mem_search` in parallel when the task touches code
-2. `mem_search` compact first
-3. `memory_get_batch` only for selected IDs
-4. `context_build` or `context_compile_v2` only when necessary
+1. `knowledge_report(layer:"repository")` first, in Markdown form
+2. repository-layer `knowledge_query` for relevant components, architecture, and relationships
+3. compact `mem_search` after graph context
+4. `memory_get_batch` only for selected IDs
+5. `context_build` or `context_compile_v2` only when necessary
 
 ## 12. Context assembly
 

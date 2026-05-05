@@ -9,6 +9,8 @@ use axum::http::{Method, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
+use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use chum_mem_app::{
     ErrorBody, HealthResponse, ReadyResponse, ServiceMetadata, build_health_response, init_tracing,
     shutdown_signal,
@@ -17,10 +19,9 @@ use chum_mem_config::{AppConfig, ServiceKind};
 use chum_mem_contracts::{
     AppendSessionEventRequest, AppendSessionEventResponse, AuthorityClass,
     BatchAppendSessionEventsRequest, BatchAppendSessionEventsResponse, BulkIndexResponse,
-    ClaimRelation,
-    ClaimRelationType, ContextBuildRequest, ContextBuildResponse, ContextItem, ContextSourceClass,
-    EndSessionRequest, EndSessionResponse, GetMemoryResponse, GovernClaimRequest,
-    GovernClaimResponse, GovernanceState, KnowledgeQueryKind,
+    ClaimRelation, ClaimRelationType, ContextBuildRequest, ContextBuildResponse, ContextItem,
+    ContextSourceClass, EndSessionRequest, EndSessionResponse, GetMemoryResponse,
+    GovernClaimRequest, GovernClaimResponse, GovernanceState, KnowledgeQueryKind,
     KnowledgeQueryRequest, MemoryBatchRequest, MemorySearchRequest, MemoryType,
     ProjectImportGraphSummary, ProofHandle, ProofType, Provider, RepositorySyncRequest,
     RepositorySyncResponse, RepositorySyncStats, RetrievalIntent, StartSessionRequest,
@@ -31,10 +32,9 @@ use chum_mem_db::{
     ClaimUpsertParams, DashboardGraphEdgeRow, DashboardGraphNodeRow, Database, DbError,
     MemoryInsertParams, MemoryProvenanceRow, MemorySearchRow, RepositoryContext, SessionEventRow,
     append_memory_provenance_batch, append_memory_provenance_preview, apply_repository_context,
-    check_readiness, create_session_replay, enqueue_worker_job, ensure_scope_entities,
-    bulk_insert_session_events_copy, create_session_events_indexes,
-    drop_session_events_indexes, insert_audit_log, insert_memory, insert_session_event,
-    insert_session_events_batch,
+    bulk_insert_session_events_copy, check_readiness, create_session_events_indexes,
+    create_session_replay, drop_session_events_indexes, enqueue_worker_job, ensure_scope_entities,
+    insert_audit_log, insert_memory, insert_session_event, insert_session_events_batch,
     load_claim_proofs, load_claim_relations_for_memory_ids, load_dashboard_summary,
     load_memories_batch, load_memory, load_memory_edges_for_ids, load_memory_graph_edges,
     load_memory_graph_nodes, load_memory_provenance, load_memory_search_rows, load_session_events,
@@ -44,8 +44,8 @@ use chum_mem_db::{
 };
 use chum_mem_pipeline::{
     CHROMA_EMBEDDING_DIMENSIONS, ChromaQueryResult, GraphProjection, GraphQueryResponse,
-    KnowledgeGraph, MemorySearchEnvelope, RankedMemory, RankingContext, SearchMetrics,
-    SessionEventRecord, build_context_pack, build_session_completion_job_plan,
+    KnowledgeGraph, MemorySearchEnvelope, RankedMemory, RankingContext, RepositoryFilePayload,
+    SearchMetrics, SessionEventRecord, build_context_pack, build_session_completion_job_plan,
     community_relevance_from_query, compile_minimal_proof_set, derive_memories_from_session,
     derive_session_episodes, embed_text, event_text, generate_knowledge_report,
     memory_community_map, merge_graphs, merge_hybrid_results, progressive_disclosure,
@@ -347,18 +347,14 @@ async fn session_events_bulk(
     Ok((StatusCode::OK, Json(response)).into_response())
 }
 
-async fn bulk_drop_indexes(
-    State(state): State<ApiState>,
-) -> Result<Response, ApiError> {
+async fn bulk_drop_indexes(State(state): State<ApiState>) -> Result<Response, ApiError> {
     drop_session_events_indexes(state.db.pool())
         .await
         .map_err(|e| map_domain_error(DomainError::Internal(e.to_string())))?;
     Ok((StatusCode::OK, Json(BulkIndexResponse { ok: true })).into_response())
 }
 
-async fn bulk_create_indexes(
-    State(state): State<ApiState>,
-) -> Result<Response, ApiError> {
+async fn bulk_create_indexes(State(state): State<ApiState>) -> Result<Response, ApiError> {
     create_session_events_indexes(state.db.pool())
         .await
         .map_err(|e| map_domain_error(DomainError::Internal(e.to_string())))?;
@@ -409,10 +405,12 @@ async fn sync_rules() -> Result<Response, ApiError> {
     let response = SyncRulesResponse {
         code_extensions: rules.code_extensions,
         doc_extensions: rules.doc_extensions,
+        binary_extensions: rules.binary_extensions,
         ignore_dirs: rules.ignore_dirs,
         ignore_files: rules.ignore_files,
         ignore_patterns: rules.ignore_patterns,
         max_file_size_bytes: rules.max_file_size_bytes,
+        max_binary_file_size_bytes: rules.max_binary_file_size_bytes,
     };
     Ok((StatusCode::OK, Json(response)).into_response())
 }
@@ -541,7 +539,7 @@ fn mcp_tool_definitions() -> Vec<Value> {
         json!({"name":"session_start","description":"Start or resume a provider session for ingestion","inputSchema":{"type":"object","properties":{"provider":{"type":"string","enum":["claude","codex","gemini"]},"projectId":{"type":"string","format":"uuid"},"externalSessionId":{"type":"string"},"repo":{"type":"object","properties":{"repoUrl":{"type":"string"},"repoName":{"type":"string"},"branch":{"type":"string"},"commitSha":{"type":"string"},"filePaths":{"type":"array","items":{"type":"string"}}}},"local":{"type":"object","properties":{"hostname":{"type":"string"},"os":{"type":"string"},"clientVersion":{"type":"string"},"userAgent":{"type":"string"}}},"metadata":{"type":"object"}},"required":["provider","projectId","externalSessionId"]}}),
         json!({"name":"session_event_append","description":"Append a normalized provider event to a session","inputSchema":{"type":"object","properties":{"sessionId":{"type":"string","format":"uuid"},"eventId":{"type":"string"},"idempotencyKey":{"type":"string"},"provider":{"type":"string","enum":["claude","codex","gemini"]},"eventType":{"type":"string","enum":["prompt","response","tool_call","tool_result","file_change","command","test_result","summary","error","annotation","reasoning","turn_context","agent_message"]},"eventTime":{"type":"string","format":"date-time"},"payload":{"type":"object"},"rawPayload":{"type":"object"},"turnId":{"type":"string","description":"Optional turn-graph identifier clustering events from one model step."}},"required":["sessionId","eventId","idempotencyKey","provider","eventType","eventTime","payload","rawPayload"]}}),
         json!({"name":"session_end","description":"End a session and derive searchable memories with provenance","inputSchema":{"type":"object","properties":{"sessionId":{"type":"string","format":"uuid"},"summary":{"type":"string"},"metadata":{"type":"object"}},"required":["sessionId"]}}),
-        json!({"name":"repository_sync","description":"Incremental repository sync — accepts pre-read file contents and removed paths, parses in-memory, merges into existing graph snapshot. Preferred over project_import; the plugin hook invokes this automatically.","inputSchema":{"type":"object","properties":{"projectId":{"type":"string","format":"uuid"},"files":{"type":"array","items":{"type":"object","properties":{"path":{"type":"string"},"hash":{"type":"string"},"content":{"type":"string"}},"required":["path","hash","content"]}},"removedPaths":{"type":"array","items":{"type":"string"}},"manifest":{"type":"object","additionalProperties":{"type":"string"}},"mergeWithExisting":{"type":"boolean"}},"required":["files"]}}),
+        json!({"name":"repository_sync","description":"Incremental repository sync — accepts pre-read text contents or base64 binary payloads and removed paths, parses in-memory, merges into existing graph snapshot. Preferred over project_import; the plugin hook invokes this automatically.","inputSchema":{"type":"object","properties":{"projectId":{"type":"string","format":"uuid"},"files":{"type":"array","items":{"type":"object","properties":{"path":{"type":"string"},"hash":{"type":"string"},"content":{"type":"string"},"bytesBase64":{"type":"string"},"mediaType":{"type":"string"},"sizeBytes":{"type":"integer","minimum":0}},"required":["path","hash"]}},"removedPaths":{"type":"array","items":{"type":"string"}},"manifest":{"type":"object","additionalProperties":{"type":"string"}},"mergeWithExisting":{"type":"boolean"}},"required":["files"]}}),
         json!({"name":"health_check","description":"Verify that PostgreSQL and optional Chroma dependencies are reachable","inputSchema":{"type":"object","properties":{}}}),
         json!({"name":"mem_search","description":"Natural language memory retrieval with progressive disclosure","inputSchema":{"type":"object","properties":{"query":{"type":"string"},"projectId":{"type":"string","format":"uuid"},"sessionId":{"type":"string","format":"uuid"},"provider":{"type":"string","enum":["claude","codex","gemini"]},"repoUrl":{"type":"string"},"branch":{"type":"string"},"types":{"type":"array","items":{"type":"string"}},"tags":{"type":"array","items":{"type":"string"}},"from":{"type":"string","format":"date-time"},"to":{"type":"string","format":"date-time"},"mode":{"type":"string","enum":["lexical","semantic","hybrid"]},"disclosureLevel":{"type":"string","enum":["overview","related","full"]},"includeHistorical":{"type":"boolean"},"limit":{"type":"integer","minimum":1,"maximum":50},"cursor":{"type":"string"}},"required":["query"]}}),
         json!({"name":"context_build","description":"Build a compact context pack from hybrid retrieval results","inputSchema":{"type":"object","properties":{"provider":{"type":"string","enum":["claude","codex","gemini"]},"objective":{"type":"string"},"retrievalIntent":{"type":"string","enum":["none","memory_only","repository_only","session_graph_only","hybrid"]},"projectId":{"type":"string","format":"uuid"},"repoUrl":{"type":"string"},"branch":{"type":"string"},"filePaths":{"type":"array","items":{"type":"string"}},"includeHistorical":{"type":"boolean"},"maxTokenBudget":{"type":"integer","minimum":1,"maximum":64000}},"required":["provider","objective","maxTokenBudget"]}}),
@@ -764,13 +762,16 @@ async fn handle_mcp_call(
                 .ok_or("claimId is required")?
                 .parse()
                 .map_err(|_| "invalid claimId UUID")?;
-            let input: GovernClaimRequest =
-                serde_json::from_value(json!({"newState": args.get("newState"), "reason": args.get("reason")}))
-                    .map_err(|e| e.to_string())?;
+            let input: GovernClaimRequest = serde_json::from_value(
+                json!({"newState": args.get("newState"), "reason": args.get("reason")}),
+            )
+            .map_err(|e| e.to_string())?;
             let result = perform_claim_govern(state, claim_id, input)
                 .await
                 .map_err(|e| format!("{e:?}"))?;
-            Ok(json!({"content":[{"type":"text","text":format!("Claim {} transitioned from {} to {}", result.claim_id, serde_json::to_value(&result.previous_state).unwrap_or_default(), serde_json::to_value(&result.new_state).unwrap_or_default())}],"structuredContent":result}))
+            Ok(
+                json!({"content":[{"type":"text","text":format!("Claim {} transitioned from {} to {}", result.claim_id, serde_json::to_value(&result.previous_state).unwrap_or_default(), serde_json::to_value(&result.new_state).unwrap_or_default())}],"structuredContent":result}),
+            )
         }
         _ => Err(format!("unknown tool: {tool_name}")),
     }
@@ -890,11 +891,10 @@ async fn mcp_post(State(state): State<ApiState>, request: Request) -> Result<Res
                 }
             }
 
-            let result =
-                match handle_mcp_call(&state, method, &params, default_project_id).await {
-                    Ok(content) => jsonrpc_ok(&id, content),
-                    Err(err) => jsonrpc_error(&id, -32000, &err),
-                };
+            let result = match handle_mcp_call(&state, method, &params, default_project_id).await {
+                Ok(content) => jsonrpc_ok(&id, content),
+                Err(err) => jsonrpc_error(&id, -32000, &err),
+            };
 
             let response_body =
                 serde_json::to_string(&result).map_err(|e| ApiError::internal(e.to_string()))?;
@@ -1508,12 +1508,15 @@ async fn perform_session_end(
             jobs.push(queued.job_type);
         }
 
-        (json!({
-            "derivedMemories": derived.derived_memories,
-            "derivedEpisodes": derived.derived_episodes,
-            "derivedSessionEdges": derived.derived_session_edges,
-            "unresolvedRisk": derived.unresolved_risk,
-        }), jobs)
+        (
+            json!({
+                "derivedMemories": derived.derived_memories,
+                "derivedEpisodes": derived.derived_episodes,
+                "derivedSessionEdges": derived.derived_session_edges,
+                "unresolvedRisk": derived.unresolved_risk,
+            }),
+            jobs,
+        )
     };
 
     insert_audit_log(
@@ -1595,7 +1598,10 @@ async fn perform_search(
         let needs_refresh = {
             let cache = state.community_cache.read().await;
             let project_changed = cache.project_id != input.project_id;
-            cache.loaded_at.map_or(true, |t| t.elapsed().as_secs() > CACHE_TTL_SECS) || project_changed
+            cache
+                .loaded_at
+                .map_or(true, |t| t.elapsed().as_secs() > CACHE_TTL_SECS)
+                || project_changed
         };
         if needs_refresh {
             if let Ok(scope) = scoped_context(&state.scope, input.project_id)
@@ -1654,7 +1660,9 @@ async fn perform_search(
             )
             .await
             {
-                let existing_ids: HashSet<Uuid> = lexical_hits.iter().map(|h| h.id)
+                let existing_ids: HashSet<Uuid> = lexical_hits
+                    .iter()
+                    .map(|h| h.id)
                     .chain(semantic_hits.iter().map(|h| h.id))
                     .collect();
                 let chroma_only_ids: Vec<Uuid> = chroma
@@ -1672,10 +1680,7 @@ async fn perform_search(
                             .collect();
                     }
                 }
-                chroma_semantic = chroma
-                    .iter()
-                    .map(chroma_to_semantic_query_result)
-                    .collect();
+                chroma_semantic = chroma.iter().map(chroma_to_semantic_query_result).collect();
             }
         }
     }
@@ -1731,9 +1736,7 @@ async fn perform_search(
     // and we queried a specific project, retry against the "global" project.
     if ranked.is_empty() && input.project_id.is_some() {
         let mut fallback_tx = begin_tx(state, &state.scope).await?;
-        if let Some(global_pid) =
-            resolve_global_project_id(&mut fallback_tx, &state.scope).await
-        {
+        if let Some(global_pid) = resolve_global_project_id(&mut fallback_tx, &state.scope).await {
             if input.project_id != Some(global_pid) {
                 let mut fallback_input = input.clone();
                 fallback_input.project_id = Some(global_pid);
@@ -2017,14 +2020,12 @@ async fn perform_claim_govern(
     let previous_state: GovernanceState = row.1.parse().unwrap_or_default();
     let new_state = input.new_state;
 
-    sqlx::query(
-        "UPDATE public.claims SET governance_state = $1, updated_at = now() WHERE id = $2",
-    )
-    .bind(new_state.as_str())
-    .bind(claim_id)
-    .execute(tx.as_mut())
-    .await
-    .map_err(|e| DomainError::Internal(e.to_string()))?;
+    sqlx::query("UPDATE public.claims SET governance_state = $1, updated_at = now() WHERE id = $2")
+        .bind(new_state.as_str())
+        .bind(claim_id)
+        .execute(tx.as_mut())
+        .await
+        .map_err(|e| DomainError::Internal(e.to_string()))?;
 
     let transition_id = Uuid::new_v4();
     sqlx::query(
@@ -2309,9 +2310,7 @@ async fn perform_knowledge_report(
 ) -> Result<KnowledgeReportResponse, DomainError> {
     // Knowledge reports are always project-scoped — no global fallback.
     let resolved_pid = project_id.or(state.scope.project_id).ok_or_else(|| {
-        DomainError::BadRequest(
-            "projectId is required for knowledge_report".to_string(),
-        )
+        DomainError::BadRequest("projectId is required for knowledge_report".to_string())
     })?;
     let context = scoped_context(&state.scope, Some(resolved_pid))?;
     let mut tx = begin_tx(state, &context).await?;
@@ -2334,10 +2333,8 @@ async fn perform_knowledge_report(
             .unwrap_or_default();
 
         // Build unified cross-layer summary
-        let cross_layer = build_unified_cross_layer_summary(
-            repo_graph.as_ref(),
-            session_graph.as_ref(),
-        );
+        let cross_layer =
+            build_unified_cross_layer_summary(repo_graph.as_ref(), session_graph.as_ref());
 
         let unified_markdown = format!(
             "# Unified Knowledge Report\n\n\
@@ -2402,7 +2399,11 @@ fn build_unified_cross_layer_summary(
             std::collections::HashMap::new();
         for edge in &sg.edges {
             if edge.relation == "modifies" || edge.relation == "touched_by" {
-                if let Some(file_path) = edge.target.strip_prefix("file:").or_else(|| edge.source.strip_prefix("file:")) {
+                if let Some(file_path) = edge
+                    .target
+                    .strip_prefix("file:")
+                    .or_else(|| edge.source.strip_prefix("file:"))
+                {
                     *file_edge_count.entry(file_path).or_default() += 1;
                 }
             }
@@ -2418,7 +2419,11 @@ fn build_unified_cross_layer_summary(
         }
 
         // Active decisions, open tasks, known bugs
-        let decisions: Vec<_> = sg.nodes.iter().filter(|n| n.node_type == "decision").collect();
+        let decisions: Vec<_> = sg
+            .nodes
+            .iter()
+            .filter(|n| n.node_type == "decision")
+            .collect();
         let tasks: Vec<_> = sg.nodes.iter().filter(|n| n.node_type == "task").collect();
         let bugs: Vec<_> = sg.nodes.iter().filter(|n| n.node_type == "bug").collect();
 
@@ -2582,18 +2587,40 @@ async fn perform_repository_sync(
     let files_added = input.files.len() as u32;
     let files_removed = input.removed_paths.len() as u32;
 
-    // Parse the incoming file contents in a blocking task (tree-sitter is CPU-bound)
-    let file_pairs: Vec<(String, String)> = input
+    // Parse incoming text or binary file payloads in a blocking task. Tree-sitter and
+    // ZIP/PDF header extraction are CPU-bound enough to keep off the async reactor.
+    let file_payloads: Vec<RepositoryFilePayload> = input
         .files
         .iter()
-        .map(|f| (f.path.clone(), f.content.clone()))
-        .collect();
+        .map(|file| {
+            let bytes = file
+                .bytes_base64
+                .as_deref()
+                .map(|encoded| BASE64_STANDARD.decode(encoded))
+                .transpose()
+                .map_err(|error| {
+                    DomainError::BadRequest(format!(
+                        "invalid bytesBase64 for {}: {error}",
+                        file.path
+                    ))
+                })?;
+            Ok(RepositoryFilePayload {
+                path: file.path.clone(),
+                content: file.content.clone(),
+                bytes,
+                media_type: file.media_type.clone(),
+                size_bytes: file.size_bytes,
+            })
+        })
+        .collect::<Result<_, DomainError>>()?;
     let removed_paths = input.removed_paths.clone();
 
-    let (new_nodes, new_edges) = if !file_pairs.is_empty() {
-        tokio::task::spawn_blocking(move || chum_mem_pipeline::parse_file_batch(&file_pairs))
-            .await
-            .map_err(|e| DomainError::Internal(e.to_string()))?
+    let (new_nodes, new_edges) = if !file_payloads.is_empty() {
+        tokio::task::spawn_blocking(move || {
+            chum_mem_pipeline::parse_file_payload_batch(&file_payloads)
+        })
+        .await
+        .map_err(|e| DomainError::Internal(e.to_string()))?
     } else {
         (Vec::new(), Vec::new())
     };
@@ -2626,6 +2653,12 @@ async fn perform_repository_sync(
 
         existing_graph.nodes.retain(|n| {
             !stale_prefixes.contains(&n.id)
+                && !stale_paths.contains(n.source_id.as_str())
+                && !n
+                    .metadata
+                    .get("sourceFile")
+                    .and_then(|v| v.as_str())
+                    .map_or(false, |sf| stale_paths.contains(sf))
                 && !n
                     .id
                     .starts_with("symbol:")
@@ -4775,8 +4808,9 @@ mod tests {
     }
 
     async fn integration_state(project_id: Uuid) -> Option<ApiState> {
-        let database_url = env::var("CHUM_MEM_INTEGRATION_DATABASE_URL")
-            .unwrap_or_else(|_| "postgres://chum_mem:chum_mem@127.0.0.1:65432/chum_mem".to_string());
+        let database_url = env::var("CHUM_MEM_INTEGRATION_DATABASE_URL").unwrap_or_else(|_| {
+            "postgres://chum_mem:chum_mem@127.0.0.1:65432/chum_mem".to_string()
+        });
         let values = std::collections::HashMap::from([
             ("DATABASE_URL".to_string(), database_url),
             (
@@ -4945,9 +4979,7 @@ mod tests {
                 .map(|array| {
                     array
                         .iter()
-                        .filter_map(|value| {
-                            value.as_str().and_then(|s| Uuid::parse_str(s).ok())
-                        })
+                        .filter_map(|value| value.as_str().and_then(|s| Uuid::parse_str(s).ok()))
                         .collect()
                 })
                 .unwrap_or_default();

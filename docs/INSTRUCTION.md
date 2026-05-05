@@ -154,13 +154,16 @@ Expose these capabilities through MCP tools and thin HTTP wrappers where needed:
 
 ## Retrieval contract
 
-All clients should follow the compact retrieval workflow:
+All clients should follow the graph-first compact retrieval workflow:
 
-1. `mem_search` first, compact output, small `limit`
-2. `memory_get_batch` only for selected IDs
-3. `context_build` or `context_compile_v2` only after filtering
+1. `knowledge_report(layer:"repository")` first, in Markdown form, as the primary high-level repository context
+2. repository-layer `knowledge_query` next for components, architecture, and relationships
+3. `mem_search` after graph context, compact output, small `limit`
+4. `memory_get_batch` only for selected IDs
+5. `context_build` or `context_compile_v2` only after filtering
 
 Repository questions should default to `knowledge_query(search, layer:"repository")` plus targeted file reads.
+File-level search tools are fallback only after the report, repository query, and compact memory search.
 
 `context_compile_v2` is the proof-disciplined path:
 

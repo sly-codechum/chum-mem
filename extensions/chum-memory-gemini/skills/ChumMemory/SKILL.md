@@ -1,22 +1,21 @@
 ---
 name: ChumMemory
-description: "Always-on knowledge graph and memory retrieval for code work. USE on every prompt that touches code — finding symbols, tracing imports, understanding architecture, recalling past decisions, debugging, refactoring. Replaces grep/glob for anything tree-sitter can parse. Two layers: repository (code structure) and session (interaction history). The plugin hook keeps the graph fresh before each turn — no manual import needed. PCKC v2.2.2 model: claims are the unit of memory, proof is the unit of trust, compiled minimal proof sets are the unit of context. Three-way hybrid search: lexical + pgvector ANN + Chroma ML. Graphify-style markdown reports."
+description: "Always-on knowledge graph and memory retrieval for code work. USE on every prompt that touches code — finding symbols, tracing imports, understanding architecture, recalling past decisions, debugging, refactoring. Replaces grep/glob for anything tree-sitter can parse. Two layers: repository (code structure) and session (interaction history). The plugin hook keeps the graph fresh before each turn — no manual import needed. PCKC v2.2.3 model: claims are the unit of memory, proof is the unit of trust, compiled minimal proof sets are the unit of context. Three-way hybrid search: lexical + pgvector ANN + Chroma ML. Graphify-style markdown reports."
 ---
 
-# ChumMemory (PCKC v2.2.2)
+# ChumMemory (PCKC v2.2.3)
 
 The plugin hook runs `sync.sh` on every `UserPromptSubmit`, so the repository graph is **already fresh** when your turn starts. Your job is to **query the graph instead of grepping**, then read the files the graph points to — and when you recall memory, **read proof, not prose**.
 
 ## The one rule
 
-> **On every turn that touches code, call `knowledge_query(search)` and `mem_search` in parallel BEFORE any Read / Grep / Glob / Edit.**
+> **On every turn that touches code, call `knowledge_report(layer:"repository")` first, then a repository-layer `knowledge_query`, then `mem_search`, and only then Read / Grep / Glob / Edit.**
 
-If both come back empty → only then fall back to Grep/Glob.
-If you catch yourself about to Read or Grep without having queried first → stop and query.
+Treat the report markdown as the primary high-level repository context. The first repository query should build structural awareness of relevant components, architecture, and relationships; it is not a filename grep substitute. If the report or query fails, surface the error and fix the project-scoping issue before falling back to lower-level search.
 
 ---
 
-## What PCKC v2.2.2 means for your turn
+## What PCKC v2.2.3 means for your turn
 
 The runtime uses a **Proof-Carrying Knowledge Compiler** with three-way hybrid search. Three units change:
 
@@ -26,13 +25,14 @@ The runtime uses a **Proof-Carrying Knowledge Compiler** with three-way hybrid s
 | Trust | "where did this come from" | **proof** (`authority_class`, `verification_status`, `proof_type`, `source_ref`, `excerpt`, `freshness`) |
 | Context | top-k similar text | **compiled minimal proof set** (smallest set of current-valid claims whose proof is sufficient to answer) |
 
-### v2.2.2 Architecture
+### v2.2.3 Architecture
 
+- **Multi-project scoping**: each project folder gets its own dynamically assigned project ID (stored in `.chum-mem`). Repository knowledge graphs and reports are strictly per-project. Memory search (`mem_search`) falls back to a "global" project when the current project has no memories yet, so historical decisions and facts remain accessible.
 - **Three-way hybrid search**: lexical (PostgreSQL FTS) + pgvector ANN + Chroma ML embeddings, merged and ranked together. Chroma is a primary source, not a fallback.
 - **Ranking weights**: semantic 30% + lexical 32% + session relevance 12% + graph proximity 10% + recency/importance/confidence 22%. Content match dominates.
 - **Typed embedding partitions**: `mem_search` with `types` routes to per-type Chroma collections (`memories_bug`, `memories_decision`, etc.) for higher precision.
 - **Hierarchical communities**: level-0 clusters + level-1 sub-communities via Leiden. Supports graphs up to 100K nodes / 200K edges.
-- **Graphify-style reports**: `knowledge_report` returns markdown with one-line extraction summary, god nodes, node/edge type distributions, and community hierarchy.
+- **Graphify-style reports**: `knowledge_report` returns markdown with one-line extraction summary, god nodes, node/edge type distributions, and community hierarchy. Reports are per-project — each project folder gets its own report from its synced code.
 - **Community cache**: 5-minute TTL, project-scoped. First query loads the session graph (~800ms), subsequent queries use cached community maps (<100ms).
 - **Soft type filter**: when `types` are requested, matching results are preferred. If no exact matches exist, unfiltered results are returned rather than empty.
 
@@ -46,16 +46,25 @@ Practical consequences for a turn:
 
 ---
 
-## Decision tree — pick your first call
+## Required retrieval prelude
 
-| User wants to… | First call |
+Before any task-specific lookup, execute this sequence exactly:
+
+1. `knowledge_report(layer:"repository", projectId)` — markdown report, primary high-level context.
+2. `knowledge_query(query:"search"|"hub_nodes", layer:"repository", projectId, text?)` — repository-level architecture/relationship overview.
+3. `mem_search(query, mode:"hybrid", disclosureLevel:"overview", limit:5, projectId?)` — compact PCKC claim recall after graph context.
+4. Read files or use Grep/Glob only after steps 1-3.
+
+Then choose the task-specific graph query:
+
+| User wants to… | Task-specific graph query |
 |---|---|
-| Find a symbol / file by name | `knowledge_query(search, text:"<name>", layer:"repository")` |
+| Find a symbol / file by name | `knowledge_query(search, text:"<name>", layer:"repository")` after the report |
 | See what calls or imports a file | `knowledge_query(neighbors, nodeId:"file:<path>", layer:"repository")` |
-| Understand project architecture | `knowledge_report(layer:"repository")` + `knowledge_query(hub_nodes, layer:"repository")` |
+| Understand project architecture | `knowledge_query(hub_nodes, layer:"repository")` after the report |
 | Trace how A relates to B | `knowledge_query(shortest_path, nodeId:"<A>", targetNodeId:"<B>", layer:"repository")` |
 | Discover coherent code clusters | `knowledge_communities(layer:"repository")` |
-| Recall a past decision / fact / bug | `mem_search(query, mode:"hybrid", types:["decision"\|"fact"\|"bug"])` |
+| Recall a past decision / fact / bug | after report + repository query, `mem_search(query, mode:"hybrid", types:["decision"\|"fact"\|"bug"])` |
 | Find open tasks or unresolved work | `mem_search(query, mode:"hybrid", types:["task","open_question"])` |
 | Pull a specific past session | `mem_search(query, sessionId, disclosureLevel:"full")` |
 | Check if a belief has been superseded | `mem_search(query, mode:"hybrid", includeHistorical:true)` and read `superseded_by` / `valid_to` |
@@ -68,9 +77,9 @@ Practical consequences for a turn:
 
 **"How does auth work here?"** (repository-truth mode)
 ```
-PARALLEL:
-  knowledge_query(query:"search", text:"auth login token session", layer:"repository")
-  mem_search(query:"authentication flow", mode:"hybrid", limit:5, types:["fact","decision","implementation_detail"])
+knowledge_report(layer:"repository")
+knowledge_query(query:"search", text:"auth login token session", layer:"repository")
+mem_search(query:"authentication flow", mode:"hybrid", limit:5, types:["fact","decision","implementation_detail"])
 ```
 Then for the top file hit:
 ```
@@ -92,9 +101,10 @@ Keep only hits with no `superseded_by` and `valid_to` unset. If two unsuperseded
 
 **"What bugs are open on the retrieval pipeline?"** (debugging, claim-native)
 ```
-PARALLEL:
-  mem_search(query:"retrieval ranking bug", types:["bug","open_question"], mode:"hybrid")
-  knowledge_query(query:"neighbors", nodeId:"file:rust/crates/chum_mem_pipeline/src/ranking.rs", layer:"repository", depth:2)
+knowledge_report(layer:"repository")
+knowledge_query(query:"search", text:"retrieval ranking pipeline", layer:"repository")
+mem_search(query:"retrieval ranking bug", types:["bug","open_question"], mode:"hybrid")
+knowledge_query(query:"neighbors", nodeId:"file:rust/crates/chum_mem_pipeline/src/ranking.rs", layer:"repository", depth:2)
 ```
 
 **"What's the most central module?"**
@@ -135,8 +145,8 @@ Rule of thumb: if a hit has `activeConflictCount > 0`, or `verificationStatus !=
 
 Pick a mode explicitly for every non-trivial turn. PCKC distinguishes four:
 
-1. **Repository-truth mode** — questions about files, symbols, imports, architecture, call graphs, debugging state backed by code + tests. First call is `knowledge_query` on `layer:"repository"`. Session memory is a secondary witness, not the source of truth.
-2. **Continuity mode** — questions about prior decisions, active tasks, unresolved work, user intent over time. First call is `mem_search` on `decision` / `task` / `open_question` claim types.
+1. **Repository-truth mode** — questions about files, symbols, imports, architecture, call graphs, debugging state backed by code + tests. First call is always `knowledge_report(layer:"repository")`, followed by repository-layer `knowledge_query`. Session memory is a secondary witness, not the source of truth.
+2. **Continuity mode** — questions about prior decisions, active tasks, unresolved work, user intent over time. Still load `knowledge_report` and a repository-layer `knowledge_query` first, then call `mem_search` on `decision` / `task` / `open_question` claim types.
 3. **Conflict mode** — triggered when retrieved claims disagree, `activeConflictCount > 0`, or two unsuperseded decisions contradict. Behaviour: **surface the conflict explicitly**, prefer the higher `authorityClass`, request user verification when authorities tie, and refuse unsupported synthesis.
 4. **Proof-limited mode** — when only part of the request is answerable from verified claims. Behaviour: answer only what proof supports, mark the unknowns, and **never fill gaps with narrative guesses**. "I don't have a verified claim for X" is a valid answer.
 
@@ -144,8 +154,8 @@ Pick a mode explicitly for every non-trivial turn. PCKC distinguishes four:
 
 ## Anti-patterns — DO NOT
 
-- ❌ Open with `Grep` or `Glob` on code-navigation tasks → call `knowledge_query(search)` first.
-- ❌ Sequential `knowledge_query` then `mem_search` → they're independent, **always parallel**.
+- ❌ Open with `knowledge_query`, `mem_search`, `Grep`, or `Glob` before `knowledge_report(layer:"repository")`.
+- ❌ Run `knowledge_query` and `mem_search` in parallel for the first lookup. The required order is report → repository query → memory search.
 - ❌ Omit the `layer` argument → always pass `repository` or `session`.
 - ❌ Treat a `mem_search` `summary` string as ground truth without reading `verificationStatus`, `authorityClass`, and `activeConflictCount` first.
 - ❌ Cite a claim that has `superseded_by` set, or whose `valid_to` is in the past, as current truth.
@@ -216,8 +226,10 @@ The host hook (Claude Code or Codex) calls `session_start` → `session_event_ap
 
 ## Parallelism rules
 
-- `knowledge_query(search)` ⫾ `mem_search` — **always parallel**
-- `knowledge_report(repository)` ⫾ `knowledge_report(session)` — parallel
+- The first call is never parallel: `knowledge_report(layer:"repository")` must complete before other retrieval.
+- After the report, run one repository-layer `knowledge_query` before memory search.
+- After report + repository query, independent `mem_search` calls may run in parallel.
+- `knowledge_report(repository)` ⫾ `knowledge_report(session)` is allowed only after the mandatory repository report has completed.
 - Multiple `knowledge_query(neighbors, …)` for different files — parallel
 - Multiple `mem_search` calls for disjoint claim types (e.g. `["decision"]` ⫾ `["bug","open_question"]`) — parallel
 - Always `memory_get_batch` instead of multiple `memory_get`
@@ -234,7 +246,7 @@ The hook runs sync **before** your turn — so sync latency is invisible to you.
 | `knowledge_query(hub_nodes)` | <50ms | 24ms |
 | `knowledge_report` | <200ms | 150ms |
 | `mem_search(hybrid)` | <100ms | 40-95ms |
-| **Full per-turn lookup** | **<150ms** | parallel-bound |
+| **Required per-turn prelude** | **<300ms warm** | report + repository query + compact memory |
 
 Note: first query after API restart or 5-minute cache expiry takes ~800ms (session graph load). Subsequent queries use cached community maps. If any tool consistently exceeds 1s on warm cache, surface it to the user — the graph or DB is unhealthy.
 

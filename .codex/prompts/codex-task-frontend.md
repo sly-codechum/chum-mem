@@ -20,7 +20,7 @@ Constraints:
 - never expose full token values after creation
 - favor simple component structure and typed server/client boundaries
 - align screens with API contracts instead of inventing parallel data models
-- memory-first: `mem_search` -> filter IDs -> `memory_get_batch` before UI implementation
+- memory-first: `knowledge_report(layer:"repository")` -> repository-layer `knowledge_query` -> compact `mem_search` -> filter IDs -> `memory_get_batch` before UI implementation
 
 Deliverables:
 - route structure

@@ -5,8 +5,7 @@ use chum_mem_contracts::CanonicalEventType;
 use chum_mem_db::{
     Database, RepositoryContext, WorkerJobRecord, apply_repository_context, check_readiness,
     claim_next_worker_job, complete_worker_job, fail_worker_job, load_candidate_completed_sessions,
-    load_pckc_memory_edges, load_session_events_limited,
-    mark_session_replay_ready,
+    load_pckc_memory_edges, load_session_events_limited, mark_session_replay_ready,
 };
 use chum_mem_pipeline::{
     KnowledgeEdge, MemoryNodeInput, SessionEventRecord, UpsertMemory,
@@ -346,10 +345,14 @@ async fn reconcile_claim_state_job(
             .execute(&mut *tx)
             .await
             .map_err(|error| error.to_string())?;
-        let outcome =
-            chum_mem_db::reconcile::reconcile_claim_state_for_claims(&mut tx, &scoped, job.project_id, chunk)
-                .await
-                .map_err(|error| error.to_string())?;
+        let outcome = chum_mem_db::reconcile::reconcile_claim_state_for_claims(
+            &mut tx,
+            &scoped,
+            job.project_id,
+            chunk,
+        )
+        .await
+        .map_err(|error| error.to_string())?;
         tx.commit().await.map_err(|error| error.to_string())?;
         totals.merge(outcome);
     }
@@ -377,21 +380,14 @@ async fn derive_session_memories_job(
         .session_id
         .ok_or("derive-session-memories job missing session_id")?;
     let summary = job.payload.get("summary").and_then(Value::as_str);
-    let metadata = job
-        .payload
-        .get("metadata")
-        .cloned()
-        .unwrap_or(json!({}));
+    let metadata = job.payload.get("metadata").cloned().unwrap_or(json!({}));
     let body = json!({
         "sessionId": session_id,
         "summary": summary,
         "metadata": metadata,
         "defer": false,
     });
-    let url = format!(
-        "{}v1/ingest/session/end",
-        config.dashboard_api_url.as_str()
-    );
+    let url = format!("{}v1/ingest/session/end", config.dashboard_api_url.as_str());
     let response = http_client
         .post(&url)
         .json(&body)
@@ -433,7 +429,8 @@ async fn sync_chroma_index(
 
     // Bulk-complete sibling sync jobs for the same project — they'd each
     // re-sync the same session memories redundantly.
-    let deduped = bulk_complete_sibling_jobs(db, scope, job.project_id, job.id, "sync-chroma-index").await;
+    let deduped =
+        bulk_complete_sibling_jobs(db, scope, job.project_id, job.id, "sync-chroma-index").await;
     if deduped > 0 {
         info!(
             project_id = %job.project_id,
@@ -448,11 +445,10 @@ async fn sync_chroma_index(
         .map_err(|error| error.to_string())?;
     // Scope to session when available (fast path: ~50-200 memories).
     // Falls back to full project sync when session_id is absent.
-    let memories = chum_mem_db::load_memories_for_chroma_scoped(
-        &mut tx, &scoped, job.project_id, session_id,
-    )
-    .await
-    .map_err(|error| error.to_string())?;
+    let memories =
+        chum_mem_db::load_memories_for_chroma_scoped(&mut tx, &scoped, job.project_id, session_id)
+            .await
+            .map_err(|error| error.to_string())?;
     tx.commit().await.map_err(|error| error.to_string())?;
 
     info!(
@@ -731,8 +727,7 @@ async fn build_knowledge_graph_job_batched(
     // Build a graph for each session and merge incrementally
     let mut accumulated = existing;
     for &session_id in &all_session_ids {
-        let session_graph =
-            build_session_graph(&mut tx, scope, job.project_id, session_id).await?;
+        let session_graph = build_session_graph(&mut tx, scope, job.project_id, session_id).await?;
         accumulated = Some(match accumulated {
             Some(base) => merge_graphs(&base, &session_graph),
             None => session_graph,
@@ -832,19 +827,18 @@ async fn build_session_graph(
     let memories = load_session_memory_rows(tx, scope, project_id, session_id)
         .await
         .map_err(|error| error.to_string())?;
-    let prior_session_ids =
-        load_candidate_completed_sessions(tx, &scoped, project_id, session_id)
-            .await
-            .map_err(|error| error.to_string())?
-            .into_iter()
-            .filter_map(|candidate| {
-                if candidate.id == session_id {
-                    None
-                } else {
-                    Some(candidate.id)
-                }
-            })
-            .collect::<Vec<_>>();
+    let prior_session_ids = load_candidate_completed_sessions(tx, &scoped, project_id, session_id)
+        .await
+        .map_err(|error| error.to_string())?
+        .into_iter()
+        .filter_map(|candidate| {
+            if candidate.id == session_id {
+                None
+            } else {
+                Some(candidate.id)
+            }
+        })
+        .collect::<Vec<_>>();
 
     Ok(build_knowledge_graph(
         project_id,

@@ -86,7 +86,9 @@ pub const MIGRATION_FILES: &[MigrationFile] = &[
     },
     MigrationFile {
         name: "0012_derive_session_memories_job_type.sql",
-        contents: include_str!("../../../../infra/migrations/0012_derive_session_memories_job_type.sql"),
+        contents: include_str!(
+            "../../../../infra/migrations/0012_derive_session_memories_job_type.sql"
+        ),
         sentinel: None,
         transactional: true,
     },
@@ -111,17 +113,13 @@ pub const MIGRATION_FILES: &[MigrationFile] = &[
     },
     MigrationFile {
         name: "0016_bulk_ingest_optimizations.sql",
-        contents: include_str!(
-            "../../../../infra/migrations/0016_bulk_ingest_optimizations.sql"
-        ),
+        contents: include_str!("../../../../infra/migrations/0016_bulk_ingest_optimizations.sql"),
         sentinel: None,
         transactional: true,
     },
     MigrationFile {
         name: "0017_partition_session_events.sql",
-        contents: include_str!(
-            "../../../../infra/migrations/0017_partition_session_events.sql"
-        ),
+        contents: include_str!("../../../../infra/migrations/0017_partition_session_events.sql"),
         sentinel: None,
         // DDL + large data copy cannot run in a single transaction.
         transactional: false,

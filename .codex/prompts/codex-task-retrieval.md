@@ -21,7 +21,7 @@ Constraints:
 - keep memory derivation deterministic where possible
 - context packs must be compact and token-budget aware
 - every memory should link back to source session events
-- always use staged retrieval: `mem_search` index first, then `memory_get_batch` for selected IDs
+- always use staged retrieval: `knowledge_report(layer:"repository")` first, repository-layer `knowledge_query` second, compact `mem_search` third, then `memory_get_batch` for selected IDs
 
 Deliverables:
 - retrieval package interfaces

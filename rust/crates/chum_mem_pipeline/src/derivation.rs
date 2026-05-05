@@ -1288,9 +1288,7 @@ mod tests {
             id: Uuid::from_u128(11),
             event_type: CanonicalEventType::TurnContext,
             payload: SessionEventPayload {
-                message: Some(
-                    "Task: finish the proof compiler for context_build.".to_string(),
-                ),
+                message: Some("Task: finish the proof compiler for context_build.".to_string()),
                 ..SessionEventPayload::default()
             },
             created_at: "2026-04-15T00:01:00Z".to_string(),
@@ -1320,9 +1318,7 @@ mod tests {
             id: Uuid::from_u128(12),
             event_type: CanonicalEventType::AgentMessage,
             payload: SessionEventPayload {
-                message: Some(
-                    "Decision: use tokio::select for the worker scheduler.".to_string(),
-                ),
+                message: Some("Decision: use tokio::select for the worker scheduler.".to_string()),
                 ..SessionEventPayload::default()
             },
             created_at: "2026-04-15T00:02:00Z".to_string(),

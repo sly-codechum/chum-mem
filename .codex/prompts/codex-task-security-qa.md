@@ -19,7 +19,7 @@ Constraints:
 - plaintext secret exposure is critical
 - negative tests matter as much as positive tests
 - audit-sensitive operations must be verifiable
-- memory-first: `mem_search` -> filter IDs -> `memory_get_batch` before test/review conclusions
+- memory-first: `knowledge_report(layer:"repository")` -> repository-layer `knowledge_query` -> compact `mem_search` -> filter IDs -> `memory_get_batch` before test/review conclusions
 
 Deliverables:
 - threat and misuse checklist

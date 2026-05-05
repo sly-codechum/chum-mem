@@ -21,7 +21,7 @@ Constraints:
 - no plaintext token storage
 - all writes must be idempotent where applicable
 - RLS-safe patterns only
-- memory-first: `mem_search` -> filter IDs -> `memory_get_batch` before backend changes
+- memory-first: `knowledge_report(layer:"repository")` -> repository-layer `knowledge_query` -> compact `mem_search` -> filter IDs -> `memory_get_batch` before backend changes
 
 Deliverables:
 - migration files
