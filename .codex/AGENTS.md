@@ -46,7 +46,9 @@ This startup prompt defines the required MCP lifecycle:
 - `session_start` at chat begin
 - `session_event_append` for key events
 - `session_end` before final answer
-- `mem_search` before new task work where prior memory may help
+- `knowledge_report(layer:"repository")` before any graph query or memory search
+- repository-layer `knowledge_query` before memory search
+- `mem_search` only after report + repository query when prior memory may help
 
 Do not skip these unless the user explicitly disables memory ingestion for the chat.
 
@@ -54,12 +56,15 @@ Do not skip these unless the user explicitly disables memory ingestion for the c
 
 For every implementation task, always run this retrieval sequence before coding:
 
-1. `mem_search` (`mode=hybrid`, `disclosureLevel=overview`, small `limit`)
-2. filter relevant memory IDs
-3. `memory_get_batch` for filtered IDs only
-4. optional `context_build` if extra compact context is needed
+1. `knowledge_report(layer:"repository")` in Markdown form; treat it as primary high-level repository context
+2. repository-layer `knowledge_query` for relevant components, architecture, and relationships
+3. `mem_search` (`mode=hybrid`, `disclosureLevel=overview`, small `limit`)
+4. filter relevant memory IDs
+5. `memory_get_batch` for filtered IDs only
+6. optional `context_build` if extra compact context is needed
 
 Do not jump straight to full memory dumps.
+Do not use Grep/Glob or file-level search before steps 1-3.
 
 ## Expected repository layout
 

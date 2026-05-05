@@ -792,9 +792,7 @@ pub async fn insert_session_events_batch(
             .get(&key_a)
             .copied()
             .or_else(|| by_event_id.get(&key_b).copied())
-            .ok_or_else(|| {
-                DbError::Sqlx(sqlx::Error::RowNotFound)
-            })?;
+            .ok_or_else(|| DbError::Sqlx(sqlx::Error::RowNotFound))?;
         results[idx].event_id = resolved_id;
         // results[idx].duplicate is already true
     }
@@ -836,7 +834,9 @@ pub async fn bulk_insert_session_events_copy(
            turn_id text\
          )"
     );
-    pool.execute(create_sql.as_str()).await.map_err(DbError::Sqlx)?;
+    pool.execute(create_sql.as_str())
+        .await
+        .map_err(DbError::Sqlx)?;
 
     // Build CSV payload in memory. For typical batch sizes (200-2000) this is fine.
     let mut csv_buf = String::with_capacity(total * 512);
@@ -906,7 +906,10 @@ pub async fn bulk_insert_session_events_copy(
          FROM public.{staging} \
          ON CONFLICT DO NOTHING"
     );
-    let result = pool.execute(merge_sql.as_str()).await.map_err(DbError::Sqlx)?;
+    let result = pool
+        .execute(merge_sql.as_str())
+        .await
+        .map_err(DbError::Sqlx)?;
     let inserted = result.rows_affected() as usize;
 
     // 4. Cleanup staging table.
@@ -1437,10 +1440,7 @@ pub async fn replace_claim_proofs(
     // the same session_event is cited; keep the unique constraint safe.
     qb.push(" on conflict (claim_id, source_ref) do nothing");
 
-    qb.build()
-        .execute(&mut **tx)
-        .await
-        .map_err(DbError::from)?;
+    qb.build().execute(&mut **tx).await.map_err(DbError::from)?;
 
     Ok(())
 }
@@ -1474,10 +1474,7 @@ pub async fn append_memory_provenance_batch(
     });
     qb.push(" on conflict (memory_id, session_event_id) do nothing");
 
-    qb.build()
-        .execute(&mut **tx)
-        .await
-        .map_err(DbError::from)?;
+    qb.build().execute(&mut **tx).await.map_err(DbError::from)?;
     Ok(())
 }
 

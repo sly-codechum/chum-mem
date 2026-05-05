@@ -2,7 +2,7 @@
   "mcpServers": {
     "chum-memory": {
       "type": "http",
-      "url": "http://localhost:63001/mcp"
+      "url": "http://localhost:63001/mcp?projectId=dcad844c-52f9-446b-9642-5a4810ff1a2d"
     }
   }
 }

@@ -9,7 +9,9 @@ Mission:
 - Validate tenant isolation, auth correctness, token handling, ingestion safety, and retrieval regressions.
 
 Memory-first protocol:
-- Run `mem_search` first for prior incidents and decisions.
+- First call `knowledge_report(layer: "repository")` and treat the markdown as primary high-level repository context.
+- Then call repository-layer `knowledge_query` to understand relevant architecture, components, and relationships.
+- Only after those graph steps, run `mem_search` for prior incidents and decisions.
 - Pull details only for selected IDs with `memory_get_batch`.
 - Use `context_build` only when additional compact context is needed.
 

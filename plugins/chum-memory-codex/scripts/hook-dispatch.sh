@@ -81,6 +81,20 @@ if [[ -z "${RESOLVED_PROJECT_ID:-}" || "$RESOLVED_PROJECT_ID" == "null" ]]; then
 fi
 export CHUM_MEM_PROJECT_ID="${RESOLVED_PROJECT_ID:-${CHUM_MEM_PROJECT_ID:-}}"
 
+# ── Ensure .mcp.json carries the project ID in the URL ──
+if [[ -n "${CHUM_MEM_PROJECT_ID:-}" ]]; then
+  MCP_JSON_PATH="${SCRIPTS_DIR}/../.mcp.json"
+  MCP_URL_WITH_PROJECT="${API_URL}/mcp?projectId=${CHUM_MEM_PROJECT_ID}"
+  if [[ -f "$MCP_JSON_PATH" ]]; then
+    CURRENT_URL=$(jq -r '.mcpServers["chum-memory"].url // ""' "$MCP_JSON_PATH" 2>/dev/null || echo "")
+    if [[ "$CURRENT_URL" != "$MCP_URL_WITH_PROJECT" ]]; then
+      jq --arg url "$MCP_URL_WITH_PROJECT" \
+        '.mcpServers["chum-memory"].url = $url' "$MCP_JSON_PATH" > "${MCP_JSON_PATH}.tmp" \
+        && mv "${MCP_JSON_PATH}.tmp" "$MCP_JSON_PATH"
+    fi
+  fi
+fi
+
 # ── Session layer (always runs for every event) ──
 SESSION_STDERR=""
 if [[ -x "${SCRIPTS_DIR}/session-sync.sh" ]]; then
@@ -109,8 +123,8 @@ emit_codex() {
   printf '{"systemMessage":"%s"}\n' "$message"
 }
 
-USER_PROMPT_MSG="ChumMemory graph is fresh (PCKC v2.2.3). For any code-navigation or recall step, CALL knowledge_query(search, layer:repository) AND mem_search in parallel BEFORE any Read/Grep/Glob/Edit. Before editing a file, CALL knowledge_query(neighbors, nodeId:'file:<path>', layer:repository) first. Grep/Glob is fallback only. Three-way hybrid search: lexical + pgvector + Chroma ML. Reports are graphify-style markdown. Load the ChumMemory skill for the full cookbook if unsure."
-SESSION_START_BASE="ChumMemory plugin active (PCKC v2.2.3, MCP server: chum-memory). Multi-project mode: each project folder has its own project ID (auto-resolved via .chum-mem). Repository layer (knowledge_query, knowledge_report, knowledge_communities) is STRICTLY per-project — projectId is required, no global fallback. Session layer knowledge queries fall back to global project if no project-specific snapshot exists. mem_search falls back to global project for historical memories. The hook auto-runs repository_sync before every turn — do NOT call project_import or repository_sync manually. On every code-related prompt: knowledge_query(search, layer:repository) + mem_search in parallel first; Grep/Glob is the fallback only. Two layers: repository (code structure, AST) and session (interaction history). Always pass layer. Three-way hybrid search (lexical + pgvector + Chroma). Typed partitions for per-type precision. Hierarchical communities (level-0 + level-1). Governance: use claim_govern to pin/archive/reject claims. Load the ChumMemory skill for the full cookbook and decision tree."
+USER_PROMPT_MSG="ChumMemory graph is fresh (PCKC v2.2.3). Required retrieval order for any code-navigation or recall step: FIRST call MCP knowledge_report(layer:repository) and treat its markdown as primary high-level context; SECOND call repository-layer knowledge_query for architecture/components/relationships; THIRD call mem_search(mode:hybrid, disclosureLevel:overview, small limit); ONLY THEN Read/Grep/Glob/Edit. Before editing a file, call knowledge_query(neighbors, nodeId:'file:<path>', layer:repository) after the prelude. Grep/Glob is fallback only. Three-way hybrid search: lexical + pgvector + Chroma ML. Reports are graphify-style markdown. Load the ChumMemory skill for the full cookbook if unsure."
+SESSION_START_BASE="ChumMemory plugin active (PCKC v2.2.3, MCP server: chum-memory). Multi-project mode: each project folder has its own project ID (auto-resolved via .chum-mem). Repository layer (knowledge_query, knowledge_report, knowledge_communities) is STRICTLY per-project — projectId is required, no global fallback. Session layer knowledge queries fall back to global project if no project-specific snapshot exists. mem_search falls back to global project for historical memories. The hook auto-runs repository_sync before every turn — do NOT call project_import or repository_sync manually. On every code-related prompt use this strict order: MCP knowledge_report(layer:repository) first; repository-layer knowledge_query second; mem_search third; Read/Grep/Glob/Edit last. Two layers: repository (code structure, AST) and session (interaction history). Always pass layer. Three-way hybrid search (lexical + pgvector + Chroma). Typed partitions for per-type precision. Hierarchical communities (level-0 + level-1). Governance: use claim_govern to pin/archive/reject claims. Load the ChumMemory skill for the full cookbook and decision tree."
 
 # ── Fetch knowledge report on session start for codebase context ──
 fetch_knowledge_report_escaped() {

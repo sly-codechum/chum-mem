@@ -40,7 +40,13 @@ pub fn typed_collection_name(base: &str, memory_type: &str) -> String {
     let canonical: String = memory_type
         .to_ascii_lowercase()
         .chars()
-        .map(|c| if c.is_ascii_alphanumeric() || c == '_' { c } else { '_' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect();
     let suffix = match canonical.as_str() {
         "" => "all".to_string(),
@@ -242,10 +248,7 @@ pub async fn upsert_chroma_memories_typed(
             .strip_prefix(&format!("{collection_name}_"))
             .unwrap_or("all")
             .to_string();
-        by_type
-            .entry(suffix)
-            .or_default()
-            .push(memory.clone());
+        by_type.entry(suffix).or_default().push(memory.clone());
     }
 
     for (suffix, batch) in by_type {
@@ -321,7 +324,10 @@ mod tests {
     #[test]
     fn typed_collection_name_canonicalizes_known_types() {
         assert_eq!(typed_collection_name("memories", "bug"), "memories_bug");
-        assert_eq!(typed_collection_name("memories", "Decision"), "memories_decision");
+        assert_eq!(
+            typed_collection_name("memories", "Decision"),
+            "memories_decision"
+        );
         assert_eq!(
             typed_collection_name("memories", "implementation_detail"),
             "memories_impl_detail"
@@ -336,6 +342,9 @@ mod tests {
     fn typed_collection_name_handles_empty_and_weird_chars() {
         assert_eq!(typed_collection_name("memories", ""), "memories_all");
         // Spaces/dashes become underscores, so callers can't smuggle bad names.
-        assert_eq!(typed_collection_name("memories", "foo-bar baz"), "memories_foo_bar_baz");
+        assert_eq!(
+            typed_collection_name("memories", "foo-bar baz"),
+            "memories_foo_bar_baz"
+        );
     }
 }

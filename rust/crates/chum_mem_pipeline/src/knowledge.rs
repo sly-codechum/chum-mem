@@ -589,7 +589,9 @@ pub fn generate_knowledge_report(graph: &KnowledgeGraph) -> String {
         "## Summary".to_string(),
         format!(
             "- {} nodes \u{00b7} {} edges \u{00b7} {} communities detected",
-            graph.statistics.node_count, graph.statistics.edge_count, graph.statistics.community_count
+            graph.statistics.node_count,
+            graph.statistics.edge_count,
+            graph.statistics.community_count
         ),
         extraction_line,
         format!(
@@ -628,7 +630,10 @@ pub fn generate_knowledge_report(graph: &KnowledgeGraph) -> String {
         for (i, h) in hub_nodes.iter().enumerate() {
             lines.push(format!(
                 "{}. `{}` ({}) - {} edges",
-                i + 1, h.label, h.node_type, h.degree
+                i + 1,
+                h.label,
+                h.node_type,
+                h.degree
             ));
         }
     }
@@ -2101,12 +2106,11 @@ fn shortest_path(graph: &KnowledgeGraph, source: &str, target: &str) -> GraphQue
 fn parse_sub_goals(text: &str) -> Vec<String> {
     use regex::Regex;
     use std::sync::LazyLock;
-    static TOKEN_RE: LazyLock<Regex> =
-        LazyLock::new(|| Regex::new(r"[a-z0-9_./:+-]+").unwrap());
+    static TOKEN_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"[a-z0-9_./:+-]+").unwrap());
     static STOPWORDS: &[&str] = &[
-        "the", "and", "for", "with", "from", "that", "this", "what", "which",
-        "who", "how", "why", "was", "were", "has", "have", "had", "are", "can",
-        "all", "any", "but", "not", "our", "your", "his", "her", "its", "ours",
+        "the", "and", "for", "with", "from", "that", "this", "what", "which", "who", "how", "why",
+        "was", "were", "has", "have", "had", "are", "can", "all", "any", "but", "not", "our",
+        "your", "his", "her", "its", "ours",
     ];
     let lower = text.to_lowercase();
     let mut seen = HashSet::new();
@@ -2165,7 +2169,10 @@ fn score_advancement(
         to.label.to_lowercase(),
         to.id.to_lowercase()
     );
-    let hits = uncovered.iter().filter(|g| edge_text.contains(g.as_str())).count();
+    let hits = uncovered
+        .iter()
+        .filter(|g| edge_text.contains(g.as_str()))
+        .count();
     hits as f64 / uncovered.len() as f64
 }
 
@@ -2198,7 +2205,12 @@ fn goal_directed_search(
         _ => graph
             .nodes
             .iter()
-            .max_by_key(|n| compute_coverage(n, &sub_goals).iter().filter(|c| **c).count())
+            .max_by_key(|n| {
+                compute_coverage(n, &sub_goals)
+                    .iter()
+                    .filter(|c| **c)
+                    .count()
+            })
             .map(|n| n.id.clone())
             .unwrap_or_default(),
     };
@@ -2276,8 +2288,7 @@ fn goal_directed_search(
                     continue;
                 };
                 let edge = &graph.edges[edge_idx];
-                let advancement =
-                    score_advancement(from_node, to_node, edge, &sub_goals, &covered);
+                let advancement = score_advancement(from_node, to_node, edge, &sub_goals, &covered);
                 if advancement < PRUNE_THRESHOLD {
                     edges_pruned += 1;
                     continue;
@@ -2586,10 +2597,7 @@ fn build_adjacency_weighted(edges: &[KnowledgeEdge]) -> HashMap<String, Vec<(Str
 /// v2.2.2: God Node damping — reduce edge weights for nodes above the 95th
 /// percentile degree, using `1 / ln(degree)` so they don't force unrelated
 /// nodes into the same community.
-fn damp_hub_edges(
-    nodes: &[KnowledgeNode],
-    adjacency: &mut HashMap<String, Vec<(String, f64)>>,
-) {
+fn damp_hub_edges(nodes: &[KnowledgeNode], adjacency: &mut HashMap<String, Vec<(String, f64)>>) {
     // Compute degree for each node
     let mut degrees: Vec<usize> = nodes
         .iter()
@@ -2793,10 +2801,7 @@ fn split_oversized_communities(
 /// This is a lexical approximation of the "query × community summary embedding"
 /// step from DESIGN.md §3.4. Using lexical overlap avoids a separate embedding
 /// index; if/when community summary embeddings land, swap this implementation.
-pub fn community_relevance_from_query(
-    query: &str,
-    graph: &KnowledgeGraph,
-) -> HashMap<usize, f64> {
+pub fn community_relevance_from_query(query: &str, graph: &KnowledgeGraph) -> HashMap<usize, f64> {
     let goals = parse_sub_goals(query);
     if goals.is_empty() {
         return HashMap::new();
@@ -2820,7 +2825,10 @@ pub fn community_relevance_from_query(
             haystack.push(' ');
             haystack.push_str(&rep_id.to_lowercase());
         }
-        let hits = goals.iter().filter(|g| haystack.contains(g.as_str())).count();
+        let hits = goals
+            .iter()
+            .filter(|g| haystack.contains(g.as_str()))
+            .count();
         let score = hits as f64 / goals.len() as f64;
         out.insert(c.community_id, score);
     }
@@ -2973,12 +2981,7 @@ mod tests {
     #[test]
     fn goal_directed_finds_complete_path() {
         let graph = mk_test_graph();
-        let response = goal_directed_search(
-            &graph,
-            Some("file:fileA.rs"),
-            "worker oom bug",
-            3,
-        );
+        let response = goal_directed_search(&graph, Some("file:fileA.rs"), "worker oom bug", 3);
         // Should discover path fileA → funcX → bugY covering both "worker" and "oom"
         assert!(
             response.edges.len() >= 2,
@@ -3000,12 +3003,7 @@ mod tests {
     #[test]
     fn goal_directed_prunes_unrelated_edges() {
         let graph = mk_test_graph();
-        let response = goal_directed_search(
-            &graph,
-            Some("file:fileA.rs"),
-            "worker oom bug",
-            3,
-        );
+        let response = goal_directed_search(&graph, Some("file:fileA.rs"), "worker oom bug", 3);
         // noise2 should not appear — it doesn't advance toward worker/oom
         assert!(
             !response.nodes.iter().any(|n| n.id == "symbol:noise2"),
@@ -3081,7 +3079,10 @@ mod tests {
         let scores = community_relevance_from_query("worker oom", &graph);
         let c0 = scores.get(&0).copied().unwrap_or(0.0);
         let c1 = scores.get(&1).copied().unwrap_or(0.0);
-        assert!(c0 > c1, "worker/oom community should outrank docs: {c0} vs {c1}");
+        assert!(
+            c0 > c1,
+            "worker/oom community should outrank docs: {c0} vs {c1}"
+        );
         assert!((c0 - 1.0).abs() < 1e-9, "both goals present → score 1.0");
     }
 

@@ -1,5 +1,5 @@
 # Graphify-Aligned Repository Knowledge Graph
-### Implemented in Rust with tree-sitter AST parsing
+### Implemented in Rust with tree-sitter AST parsing and multimodal repository loaders
 
 `chum-mem` now ships two graph layers:
 
@@ -40,6 +40,21 @@ Extracted via tree-sitter AST parsing across 19 languages:
 - **Rationale comments**: WHY, NOTE, IMPORTANT, TODO, FIXME tags extracted from AST comment nodes
 
 Supported languages: Python, TypeScript, TSX, JavaScript, Go, Rust, Java, C, C++, Ruby, C#, Kotlin, Scala, PHP, Swift, Lua, Zig, Elixir, Julia
+
+### Multimodal repository layer
+
+The repository sync path now accepts existing text payloads plus optional
+`bytesBase64`, `mediaType`, and `sizeBytes` fields for binary files. Binary
+payloads are parsed in Rust and normalized into the same `KnowledgeNode` /
+`KnowledgeEdge` graph model used by code and text files.
+
+- `.docx` — Office Open XML text extraction from document/header/footer XML
+- `.xlsx` — shared string and worksheet text extraction
+- `.pptx` — slide text extraction
+- `.pdf` — best-effort embedded text extraction with diagnostics when OCR/full parsing is needed
+- `.png`, `.jpg`, `.webp`, `.gif` — image metadata and dimensions where decodable
+- `.mp4`, `.mov`, `.mp3`, `.wav` — media container/header metadata with transcript-needed markers
+- unsupported/corrupt inputs — metadata-only file nodes plus parse diagnostic section nodes
 
 ### Semantic/explanatory layer
 

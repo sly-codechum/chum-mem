@@ -184,7 +184,10 @@ export type ProjectImportResponse = z.infer<typeof projectImportResponseSchema>;
 export const syncFileEntrySchema = z.object({
   path: z.string().min(1),
   hash: z.string().min(1),
-  content: z.string()
+  content: z.string().optional(),
+  bytesBase64: z.string().optional(),
+  mediaType: z.string().optional(),
+  sizeBytes: z.number().int().nonnegative().optional()
 });
 export type SyncFileEntry = z.infer<typeof syncFileEntrySchema>;
 
@@ -224,9 +227,11 @@ export type RepositorySyncResponse = z.infer<typeof repositorySyncResponseSchema
 export const syncRulesResponseSchema = z.object({
   codeExtensions: z.array(z.string()),
   docExtensions: z.array(z.string()),
+  binaryExtensions: z.array(z.string()).default([]),
   ignoreDirs: z.array(z.string()),
   ignoreFiles: z.array(z.string()),
   ignorePatterns: z.array(z.string()),
-  maxFileSizeBytes: z.number().int().positive()
+  maxFileSizeBytes: z.number().int().positive(),
+  maxBinaryFileSizeBytes: z.number().int().positive().default(16 * 1024 * 1024)
 });
 export type SyncRulesResponse = z.infer<typeof syncRulesResponseSchema>;

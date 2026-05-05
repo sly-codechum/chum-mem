@@ -7,8 +7,8 @@ This extension gives you MCP tools for persistent memory and a knowledge graph. 
 When the user mentions memory, recall, search, session, ingestion, knowledge graph, or uses `/chum-memory`:
 
 1. **Always call MCP tools directly.** Do not summarize what you could do — execute the tool call.
-2. Start with `knowledge_report` so the session reads the knowledge base before raw retrieval.
-3. Use `knowledge_query` or `knowledge_communities` to navigate by graph structure first. Use `graph_snapshot` or `knowledge_graph_export` only when raw graph structure is needed.
+2. Start with `knowledge_report(layer:"repository")` so the session reads the repository knowledge graph report before raw retrieval.
+3. Use a repository-layer `knowledge_query` to build structural awareness of relevant components, architecture, and relationships. Use `knowledge_communities` after that when cluster structure matters.
 4. Then call `mem_search` (mode=hybrid, disclosureLevel=overview, limit=5).
    Include `sessionId` when continuing the same workstream.
 5. If results are relevant, call `memory_get_batch` with selected IDs.
@@ -88,8 +88,8 @@ When persisting sessions, keep structured event context:
 
 ## Current runtime model
 
-- PostgreSQL + pgvector is the canonical semantic retrieval path.
-- Chroma is optional only and must not be treated as the primary source of truth.
+- PostgreSQL + pgvector is the durable retrieval substrate.
+- Chroma is an active typed semantic retrieval source in the v2.2.3 hybrid path, not a fallback.
 - `session_end` derives episode-based memories, builds the knowledge graph, and may enqueue replay or sync follow-up work.
 - `health_check` includes migration state, worker queue state, and entity counts.
 

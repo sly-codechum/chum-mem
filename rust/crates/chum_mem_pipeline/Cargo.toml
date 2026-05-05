@@ -18,6 +18,7 @@ thiserror.workspace = true
 tracing.workspace = true
 time.workspace = true
 uuid.workspace = true
+zip.workspace = true
 
 # Tree-sitter core + language grammars
 streaming-iterator.workspace = true

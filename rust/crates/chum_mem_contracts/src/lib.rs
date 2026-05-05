@@ -681,7 +681,14 @@ pub struct ProjectImportGraphSummary {
 pub struct SyncFileEntry {
     pub path: String,
     pub hash: String,
-    pub content: String,
+    #[serde(default)]
+    pub content: Option<String>,
+    #[serde(default)]
+    pub bytes_base64: Option<String>,
+    #[serde(default)]
+    pub media_type: Option<String>,
+    #[serde(default)]
+    pub size_bytes: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -726,10 +733,14 @@ pub struct RepositorySyncStats {
 pub struct SyncRulesResponse {
     pub code_extensions: Vec<String>,
     pub doc_extensions: Vec<String>,
+    #[serde(default)]
+    pub binary_extensions: Vec<String>,
     pub ignore_dirs: Vec<String>,
     pub ignore_files: Vec<String>,
     pub ignore_patterns: Vec<String>,
     pub max_file_size_bytes: u64,
+    #[serde(default)]
+    pub max_binary_file_size_bytes: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

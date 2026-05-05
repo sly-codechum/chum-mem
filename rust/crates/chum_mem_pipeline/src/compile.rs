@@ -233,9 +233,10 @@ pub fn compile_minimal_proof_set(
     while !uncovered.is_empty() {
         let mut best: Option<(usize, f64)> = None;
         for (idx, item) in candidates.iter().enumerate() {
-            let dedupe_key = item.claim_key.clone().unwrap_or_else(|| {
-                format!("{:?}:{}", item.source_class, item.title)
-            });
+            let dedupe_key = item
+                .claim_key
+                .clone()
+                .unwrap_or_else(|| format!("{:?}:{}", item.source_class, item.title));
             if selected_ids.contains(&dedupe_key) {
                 continue;
             }
@@ -268,9 +269,10 @@ pub fn compile_minimal_proof_set(
         for goal in coverage(pick) {
             uncovered.remove(&goal);
         }
-        let dedupe_key = pick.claim_key.clone().unwrap_or_else(|| {
-            format!("{:?}:{}", pick.source_class, pick.title)
-        });
+        let dedupe_key = pick
+            .claim_key
+            .clone()
+            .unwrap_or_else(|| format!("{:?}:{}", pick.source_class, pick.title));
         selected_ids.insert(dedupe_key);
         selected.push(pick.clone());
     }
@@ -283,9 +285,10 @@ pub fn compile_minimal_proof_set(
     let mut filler: Vec<ContextItem> = items
         .iter()
         .filter(|item| {
-            let key = item.claim_key.clone().unwrap_or_else(|| {
-                format!("{:?}:{}", item.source_class, item.title)
-            });
+            let key = item
+                .claim_key
+                .clone()
+                .unwrap_or_else(|| format!("{:?}:{}", item.source_class, item.title));
             !selected_ids.contains(&key) && is_admissible(item)
         })
         .cloned()
@@ -526,12 +529,8 @@ mod tests {
 
         // Plain objective — sub-goal inference picks up only the core trio
         // (decisions, tasks, facts), matching the candidate set.
-        let response = compile_minimal_proof_set(
-            "resume prior work",
-            &items,
-            1000,
-            RetrievalIntent::Hybrid,
-        );
+        let response =
+            compile_minimal_proof_set("resume prior work", &items, 1000, RetrievalIntent::Hybrid);
 
         assert!(
             response
@@ -582,10 +581,7 @@ mod tests {
 
         // Model-derived decision must not appear.
         assert!(
-            response
-                .context_pack
-                .recent_decisions
-                .is_empty(),
+            response.context_pack.recent_decisions.is_empty(),
             "model-derived decision leaked into pack: {:?}",
             response.context_pack.recent_decisions
         );
@@ -615,12 +611,8 @@ mod tests {
             ),
         ];
 
-        let response = compile_minimal_proof_set(
-            "continue work",
-            &items,
-            1000,
-            RetrievalIntent::Hybrid,
-        );
+        let response =
+            compile_minimal_proof_set("continue work", &items, 1000, RetrievalIntent::Hybrid);
 
         assert_eq!(response.context_pack.recent_decisions.len(), 1);
         assert_eq!(
@@ -765,14 +757,23 @@ mod tests {
         );
 
         let pack = &response.context_pack;
-        assert!(!pack.recent_decisions.is_empty(), "decisions should be filled");
+        assert!(
+            !pack.recent_decisions.is_empty(),
+            "decisions should be filled"
+        );
         assert!(!pack.active_tasks.is_empty(), "tasks should be filled");
         assert!(!pack.project_facts.is_empty(), "facts should be filled");
         assert!(!pack.known_bugs.is_empty(), "bugs should be filled");
         assert!(!pack.verified_fixes.is_empty(), "fixes should be filled");
         assert!(!pack.constraints.is_empty(), "constraints should be filled");
-        assert!(!pack.open_questions.is_empty(), "open_questions should be filled");
-        assert!(!pack.implementation_notes.is_empty(), "implementation should be filled");
+        assert!(
+            !pack.open_questions.is_empty(),
+            "open_questions should be filled"
+        );
+        assert!(
+            !pack.implementation_notes.is_empty(),
+            "implementation should be filled"
+        );
         assert!(
             pack.unknowns.iter().all(|u| !u.starts_with("proof_gap:")),
             "no proof gaps expected: {:?}",
@@ -851,18 +852,11 @@ mod tests {
         );
 
         let items = vec![old, current];
-        let response = compile_minimal_proof_set(
-            "get the facts",
-            &items,
-            1000,
-            RetrievalIntent::Hybrid,
-        );
+        let response =
+            compile_minimal_proof_set("get the facts", &items, 1000, RetrievalIntent::Hybrid);
 
         assert_eq!(response.context_pack.project_facts.len(), 1);
-        assert_eq!(
-            response.context_pack.project_facts[0].title,
-            "current fact"
-        );
+        assert_eq!(response.context_pack.project_facts[0].title, "current fact");
     }
 
     #[test]
@@ -883,12 +877,8 @@ mod tests {
         );
 
         let items = vec![contradicted, valid];
-        let response = compile_minimal_proof_set(
-            "resume work",
-            &items,
-            1000,
-            RetrievalIntent::Hybrid,
-        );
+        let response =
+            compile_minimal_proof_set("resume work", &items, 1000, RetrievalIntent::Hybrid);
 
         assert_eq!(response.context_pack.recent_decisions.len(), 1);
         assert_eq!(

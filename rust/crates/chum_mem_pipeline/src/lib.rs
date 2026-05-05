@@ -36,6 +36,6 @@ pub use ranking::{
     rank_hybrid_results,
 };
 pub use repository::{
-    RepositoryBuildArtifacts, RepositoryBuildOptions, RepositoryBuildResult, SyncRules,
-    build_repository_knowledge, parse_file_batch, sync_rules,
+    RepositoryBuildArtifacts, RepositoryBuildOptions, RepositoryBuildResult, RepositoryFilePayload,
+    SyncRules, build_repository_knowledge, parse_file_batch, parse_file_payload_batch, sync_rules,
 };
