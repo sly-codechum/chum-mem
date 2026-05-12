@@ -3150,7 +3150,7 @@ async fn semantic_search(
         where m.organization_id = $1
           and m.team_id = $2
           and ($7::uuid is null or m.session_id = $7)
-          and ($8::text is null or s.provider = $8)
+          and ($8::text is null or s.provider::text = $8)
           and ($9::text is null or s.branch = $9)
           and ($10::timestamptz is null or m.created_at >= $10::timestamptz)
           and ($11::timestamptz is null or m.created_at <= $11::timestamptz)

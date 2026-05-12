@@ -2037,7 +2037,7 @@ pub async fn load_memory_search_rows(
           and ($3::uuid is null or m.project_id = $3)
           and ($5::uuid is null or m.project_id = $5)
           and ($6::uuid is null or m.session_id = $6)
-          and ($7::text is null or s.provider = $7)
+          and ($7::text is null or s.provider::text = $7)
           and ($8::text is null or s.branch = $8)
           and ($9::timestamptz is null or m.created_at >= $9::timestamptz)
           and ($10::timestamptz is null or m.created_at <= $10::timestamptz)
