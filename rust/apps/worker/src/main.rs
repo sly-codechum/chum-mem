@@ -470,7 +470,6 @@ async fn sync_chroma_index(
                 "projectId": memory.project_id,
                 "createdAt": memory.created_at,
                 "sessionId": memory.session_id,
-                "repoUrl": memory.repo_url,
                 "branch": memory.branch,
                 "importanceScore": memory.importance_score,
                 "confidenceScore": memory.confidence_score,

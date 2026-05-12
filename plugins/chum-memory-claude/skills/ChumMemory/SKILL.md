@@ -44,8 +44,8 @@ The runtime uses a **Proof-Carrying Knowledge Compiler** with three-way hybrid s
 The system operates in **multi-project mode**. Each project folder is automatically registered on first use:
 
 1. The hook reads `.chum-mem` in the project root for the cached project ID
-2. If missing, it calls `POST /v1/projects/resolve` with the folder name and git remote URL
-3. The API finds an existing project by repo URL or name, or creates a new one with a fresh UUID
+2. If missing, the hook generates a local project ID and calls `POST /v1/projects/resolve` with that ID and the folder name
+3. The API resolves by project ID, or creates a new project with that ID
 4. The resolved project ID is cached in `.chum-mem` and exported as `CHUM_MEM_PROJECT_ID`
 
 **Scoping rules:**
@@ -239,7 +239,7 @@ The host hook (Claude Code or Codex) calls `session_start` → `session_event_ap
   - `disclosureLevel`: `overview` (default, compact hits) → `related` (hits + related claims) → `full` (hits + full proof handles). Escalate only when proof matters.
 - `memory_get(id*)` — single fetch, returns full proof object
 - `memory_get_batch(ids* [1–20])` — **always prefer over loops**
-- `context_build(provider*, objective*, maxTokenBudget*≤64000, filePaths, repoUrl, branch)` — compiles a minimal proof set for the objective
+- `context_build(provider*, objective*, maxTokenBudget*≤64000, filePaths, projectId, branch)` — compiles a minimal proof set for the objective
 
 **Governance**
 - `claim_govern(claimId*, newState*, reason?)` — transition a claim's governance state. Accepts memory ID or claim ID.
@@ -256,6 +256,7 @@ The host hook (Claude Code or Codex) calls `session_start` → `session_event_ap
 - `repository_sync(files*, manifest, removedPaths, mergeWithExisting, projectId)` — *hook calls this; do not invoke unless forcing a re-sync*
 
 **Session (hook-managed)**
+- `provider` is an open lowercase AI client identifier, not a closed enum.
 - `session_start(provider*, projectId*, externalSessionId*, repo, local)`
 - `session_event_append(sessionId*, eventId*, idempotencyKey*, provider*, eventType*, eventTime*, payload*, rawPayload*)`
 - `session_end(sessionId*, summary, metadata)`

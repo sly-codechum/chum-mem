@@ -23,7 +23,7 @@ use chum_mem_contracts::{
     ContextSourceClass, EndSessionRequest, EndSessionResponse, GetMemoryResponse,
     GovernClaimRequest, GovernClaimResponse, GovernanceState, KnowledgeQueryKind,
     KnowledgeQueryRequest, MemoryBatchRequest, MemorySearchRequest, MemoryType,
-    ProjectImportGraphSummary, ProofHandle, ProofType, Provider, RepositorySyncRequest,
+    ProjectImportGraphSummary, ProofHandle, ProofType, RepositorySyncRequest,
     RepositorySyncResponse, RepositorySyncStats, RetrievalIntent, StartSessionRequest,
     StartSessionResponse, SyncRulesResponse, ValidateInput, VerificationStatus,
 };
@@ -536,14 +536,14 @@ const MCP_PROTOCOL_VERSION: &str = "2025-03-26";
 
 fn mcp_tool_definitions() -> Vec<Value> {
     vec![
-        json!({"name":"session_start","description":"Start or resume a provider session for ingestion","inputSchema":{"type":"object","properties":{"provider":{"type":"string","enum":["claude","codex","gemini"]},"projectId":{"type":"string","format":"uuid"},"externalSessionId":{"type":"string"},"repo":{"type":"object","properties":{"repoUrl":{"type":"string"},"repoName":{"type":"string"},"branch":{"type":"string"},"commitSha":{"type":"string"},"filePaths":{"type":"array","items":{"type":"string"}}}},"local":{"type":"object","properties":{"hostname":{"type":"string"},"os":{"type":"string"},"clientVersion":{"type":"string"},"userAgent":{"type":"string"}}},"metadata":{"type":"object"}},"required":["provider","projectId","externalSessionId"]}}),
-        json!({"name":"session_event_append","description":"Append a normalized provider event to a session","inputSchema":{"type":"object","properties":{"sessionId":{"type":"string","format":"uuid"},"eventId":{"type":"string"},"idempotencyKey":{"type":"string"},"provider":{"type":"string","enum":["claude","codex","gemini"]},"eventType":{"type":"string","enum":["prompt","response","tool_call","tool_result","file_change","command","test_result","summary","error","annotation","reasoning","turn_context","agent_message"]},"eventTime":{"type":"string","format":"date-time"},"payload":{"type":"object"},"rawPayload":{"type":"object"},"turnId":{"type":"string","description":"Optional turn-graph identifier clustering events from one model step."}},"required":["sessionId","eventId","idempotencyKey","provider","eventType","eventTime","payload","rawPayload"]}}),
+        json!({"name":"session_start","description":"Start or resume a provider session for ingestion","inputSchema":{"type":"object","properties":{"provider":{"type":"string","minLength":1,"maxLength":64,"description":"Open AI client identifier, for example codex, claude, gemini, cursor, or aider."},"projectId":{"type":"string","format":"uuid"},"externalSessionId":{"type":"string"},"repo":{"type":"object","properties":{"repoName":{"type":"string"},"branch":{"type":"string"},"commitSha":{"type":"string"},"filePaths":{"type":"array","items":{"type":"string"}}}},"local":{"type":"object","properties":{"hostname":{"type":"string"},"os":{"type":"string"},"clientVersion":{"type":"string"},"userAgent":{"type":"string"}}},"metadata":{"type":"object"}},"required":["provider","projectId","externalSessionId"]}}),
+        json!({"name":"session_event_append","description":"Append a normalized provider event to a session","inputSchema":{"type":"object","properties":{"sessionId":{"type":"string","format":"uuid"},"eventId":{"type":"string"},"idempotencyKey":{"type":"string"},"provider":{"type":"string","minLength":1,"maxLength":64,"description":"Open AI client identifier."},"eventType":{"type":"string","enum":["prompt","response","tool_call","tool_result","file_change","command","test_result","summary","error","annotation","reasoning","turn_context","agent_message"]},"eventTime":{"type":"string","format":"date-time"},"payload":{"type":"object"},"rawPayload":{"type":"object"},"turnId":{"type":"string","description":"Optional turn-graph identifier clustering events from one model step."}},"required":["sessionId","eventId","idempotencyKey","provider","eventType","eventTime","payload","rawPayload"]}}),
         json!({"name":"session_end","description":"End a session and derive searchable memories with provenance","inputSchema":{"type":"object","properties":{"sessionId":{"type":"string","format":"uuid"},"summary":{"type":"string"},"metadata":{"type":"object"}},"required":["sessionId"]}}),
         json!({"name":"repository_sync","description":"Incremental repository sync — accepts pre-read text contents or base64 binary payloads and removed paths, parses in-memory, merges into existing graph snapshot. Preferred over project_import; the plugin hook invokes this automatically.","inputSchema":{"type":"object","properties":{"projectId":{"type":"string","format":"uuid"},"files":{"type":"array","items":{"type":"object","properties":{"path":{"type":"string"},"hash":{"type":"string"},"content":{"type":"string"},"bytesBase64":{"type":"string"},"mediaType":{"type":"string"},"sizeBytes":{"type":"integer","minimum":0}},"required":["path","hash"]}},"removedPaths":{"type":"array","items":{"type":"string"}},"manifest":{"type":"object","additionalProperties":{"type":"string"}},"mergeWithExisting":{"type":"boolean"}},"required":["files"]}}),
         json!({"name":"health_check","description":"Verify that PostgreSQL and optional Chroma dependencies are reachable","inputSchema":{"type":"object","properties":{}}}),
-        json!({"name":"mem_search","description":"Natural language memory retrieval with progressive disclosure","inputSchema":{"type":"object","properties":{"query":{"type":"string"},"projectId":{"type":"string","format":"uuid"},"sessionId":{"type":"string","format":"uuid"},"provider":{"type":"string","enum":["claude","codex","gemini"]},"repoUrl":{"type":"string"},"branch":{"type":"string"},"types":{"type":"array","items":{"type":"string"}},"tags":{"type":"array","items":{"type":"string"}},"from":{"type":"string","format":"date-time"},"to":{"type":"string","format":"date-time"},"mode":{"type":"string","enum":["lexical","semantic","hybrid"]},"disclosureLevel":{"type":"string","enum":["overview","related","full"]},"includeHistorical":{"type":"boolean"},"limit":{"type":"integer","minimum":1,"maximum":50},"cursor":{"type":"string"}},"required":["query"]}}),
-        json!({"name":"context_build","description":"Build a compact context pack from hybrid retrieval results","inputSchema":{"type":"object","properties":{"provider":{"type":"string","enum":["claude","codex","gemini"]},"objective":{"type":"string"},"retrievalIntent":{"type":"string","enum":["none","memory_only","repository_only","session_graph_only","hybrid"]},"projectId":{"type":"string","format":"uuid"},"repoUrl":{"type":"string"},"branch":{"type":"string"},"filePaths":{"type":"array","items":{"type":"string"}},"includeHistorical":{"type":"boolean"},"maxTokenBudget":{"type":"integer","minimum":1,"maximum":64000}},"required":["provider","objective","maxTokenBudget"]}}),
-        json!({"name":"context_compile_v2","description":"Compile the smallest proof set whose claims cover the objective's sub-goals. v2.2.1 replacement for context_build: hard-ceiling token budget, surfaces uncovered sub-goals as proof_gap markers in unknowns instead of silently truncating. See docs/research/v2.2.1-pckc/DESIGN.md §4.","inputSchema":{"type":"object","properties":{"provider":{"type":"string","enum":["claude","codex","gemini"]},"objective":{"type":"string"},"retrievalIntent":{"type":"string","enum":["none","memory_only","repository_only","session_graph_only","hybrid"]},"projectId":{"type":"string","format":"uuid"},"repoUrl":{"type":"string"},"branch":{"type":"string"},"filePaths":{"type":"array","items":{"type":"string"}},"includeHistorical":{"type":"boolean"},"maxTokenBudget":{"type":"integer","minimum":1,"maximum":64000}},"required":["provider","objective","maxTokenBudget"]}}),
+        json!({"name":"mem_search","description":"Natural language memory retrieval with progressive disclosure","inputSchema":{"type":"object","properties":{"query":{"type":"string"},"projectId":{"type":"string","format":"uuid"},"sessionId":{"type":"string","format":"uuid"},"provider":{"type":"string","minLength":1,"maxLength":64,"description":"Optional open AI client identifier filter."},"branch":{"type":"string"},"types":{"type":"array","items":{"type":"string"}},"tags":{"type":"array","items":{"type":"string"}},"from":{"type":"string","format":"date-time"},"to":{"type":"string","format":"date-time"},"mode":{"type":"string","enum":["lexical","semantic","hybrid"]},"disclosureLevel":{"type":"string","enum":["overview","related","full"]},"includeHistorical":{"type":"boolean"},"limit":{"type":"integer","minimum":1,"maximum":50},"cursor":{"type":"string"}},"required":["query"]}}),
+        json!({"name":"context_build","description":"Build a compact context pack from hybrid retrieval results","inputSchema":{"type":"object","properties":{"provider":{"type":"string","minLength":1,"maxLength":64,"description":"Open AI client identifier for the requesting client."},"objective":{"type":"string"},"retrievalIntent":{"type":"string","enum":["none","memory_only","repository_only","session_graph_only","hybrid"]},"projectId":{"type":"string","format":"uuid"},"branch":{"type":"string"},"filePaths":{"type":"array","items":{"type":"string"}},"includeHistorical":{"type":"boolean"},"maxTokenBudget":{"type":"integer","minimum":1,"maximum":64000}},"required":["provider","objective","maxTokenBudget"]}}),
+        json!({"name":"context_compile_v2","description":"Compile the smallest proof set whose claims cover the objective's sub-goals. v2.2.1 replacement for context_build: hard-ceiling token budget, surfaces uncovered sub-goals as proof_gap markers in unknowns instead of silently truncating. See docs/research/v2.2.1-pckc/DESIGN.md §4.","inputSchema":{"type":"object","properties":{"provider":{"type":"string","minLength":1,"maxLength":64,"description":"Open AI client identifier for the requesting client."},"objective":{"type":"string"},"retrievalIntent":{"type":"string","enum":["none","memory_only","repository_only","session_graph_only","hybrid"]},"projectId":{"type":"string","format":"uuid"},"branch":{"type":"string"},"filePaths":{"type":"array","items":{"type":"string"}},"includeHistorical":{"type":"boolean"},"maxTokenBudget":{"type":"integer","minimum":1,"maximum":64000}},"required":["provider","objective","maxTokenBudget"]}}),
         json!({"name":"graph_snapshot","description":"Return a knowledge graph snapshot of memory relationships","inputSchema":{"type":"object","properties":{}}}),
         json!({"name":"knowledge_graph_export","description":"Export the latest knowledge graph as machine-readable JSON","inputSchema":{"type":"object","properties":{"projectId":{"type":"string","format":"uuid"},"layer":{"type":"string","enum":["repository","session"],"description":"Graph layer: repository (code structure) or session (interaction history). Omit for latest of any type."}}}}),
         json!({"name":"knowledge_report","description":"Generate a human-readable knowledge report from the latest graph snapshot","inputSchema":{"type":"object","properties":{"projectId":{"type":"string","format":"uuid"},"layer":{"type":"string","enum":["repository","session"],"description":"Graph layer: repository (code structure) or session (interaction history). Omit for latest of any type."}}}}),
@@ -1077,7 +1077,7 @@ async fn main() -> anyhow::Result<()> {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct ProjectResolveRequest {
-    repo_url: Option<String>,
+    project_id: Option<Uuid>,
     name: Option<String>,
 }
 
@@ -1103,54 +1103,32 @@ async fn perform_project_resolve(
     state: &ApiState,
     input: ProjectResolveRequest,
 ) -> Result<ProjectResolveResponse, DomainError> {
-    let name = input.name.unwrap_or_else(|| {
-        input
-            .repo_url
-            .as_deref()
-            .and_then(|u| u.rsplit('/').next())
-            .map(|s| s.trim_end_matches(".git").to_string())
-            .unwrap_or_else(|| "unnamed-project".to_string())
-    });
+    let name = input
+        .name
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "unnamed-project".to_string());
 
     let mut tx = begin_tx(state, &state.scope).await?;
     ensure_scope_entities(&mut tx, &state.scope).await?;
 
-    // Try to find existing project by repo_url first, then by name.
-    // Exclude the global fallback project (slug = 'global') so it never
-    // hijacks per-project resolution.
-    let existing = if let Some(ref url) = input.repo_url {
-        let by_url = sqlx::query(
+    // Project identity is local and project-id-first. Git remotes are not
+    // reliable for local agent workspaces, so resolution never keys by repo URL.
+    let existing = if let Some(project_id) = input.project_id {
+        sqlx::query(
             r#"
             select id, name from public.projects
-            where organization_id = $1 and team_id = $2 and repo_url = $3
+            where organization_id = $1 and team_id = $2 and id = $3
               and slug != 'global'
             limit 1
             "#,
         )
         .bind(state.scope.organization_id)
         .bind(state.scope.team_id)
-        .bind(url)
+        .bind(project_id)
         .fetch_optional(&mut *tx)
         .await
-        .map_err(DbError::from)?;
-        if by_url.is_some() {
-            by_url
-        } else {
-            sqlx::query(
-                r#"
-                select id, name from public.projects
-                where organization_id = $1 and team_id = $2 and name = $3
-                  and slug != 'global'
-                limit 1
-                "#,
-            )
-            .bind(state.scope.organization_id)
-            .bind(state.scope.team_id)
-            .bind(&name)
-            .fetch_optional(&mut *tx)
-            .await
-            .map_err(DbError::from)?
-        }
+        .map_err(DbError::from)?
     } else {
         sqlx::query(
             r#"
@@ -1171,17 +1149,6 @@ async fn perform_project_resolve(
     if let Some(row) = existing {
         let project_id: Uuid = row.try_get("id").map_err(DbError::from)?;
         let project_name: String = row.try_get("name").map_err(DbError::from)?;
-        // Backfill repo_url if the existing project doesn't have one
-        if let Some(ref url) = input.repo_url {
-            sqlx::query(
-                "UPDATE public.projects SET repo_url = $1 WHERE id = $2 AND repo_url IS NULL",
-            )
-            .bind(url)
-            .bind(project_id)
-            .execute(&mut *tx)
-            .await
-            .map_err(DbError::from)?;
-        }
         commit_tx(tx).await?;
         return Ok(ProjectResolveResponse {
             project_id,
@@ -1190,12 +1157,12 @@ async fn perform_project_resolve(
         });
     }
 
-    let project_id = Uuid::new_v4();
+    let project_id = input.project_id.unwrap_or_else(Uuid::new_v4);
     let slug = format!("project-{}", &project_id.simple().to_string()[..12]);
     sqlx::query(
         r#"
-        insert into public.projects (id, organization_id, team_id, name, slug, repo_url)
-        values ($1, $2, $3, $4, $5, $6)
+        insert into public.projects (id, organization_id, team_id, name, slug)
+        values ($1, $2, $3, $4, $5)
         "#,
     )
     .bind(project_id)
@@ -1203,7 +1170,6 @@ async fn perform_project_resolve(
     .bind(state.scope.team_id)
     .bind(&name)
     .bind(&slug)
-    .bind(input.repo_url.as_deref())
     .execute(&mut *tx)
     .await
     .map_err(DbError::from)?;
@@ -1218,8 +1184,10 @@ async fn perform_project_resolve(
 
 async fn perform_session_start(
     state: &ApiState,
-    input: StartSessionRequest,
+    mut input: StartSessionRequest,
 ) -> Result<StartSessionResponse, DomainError> {
+    input.provider = normalize_provider_id(&input.provider)?;
+
     if let Some(scoped_project) = state.scope.project_id
         && scoped_project != input.project_id
     {
@@ -1235,7 +1203,6 @@ async fn perform_session_start(
         &mut tx,
         &state.scope,
         input.project_id,
-        input.repo.repo_url.as_ref().map(|value| value.as_str()),
         input.repo.branch.as_deref(),
     )
     .await?;
@@ -1248,7 +1215,7 @@ async fn perform_session_start(
         session.id,
         json!({
             "externalSessionId": input.external_session_id,
-            "provider": provider_str(input.provider),
+            "provider": input.provider,
         }),
     )
     .await?;
@@ -1265,8 +1232,10 @@ async fn perform_session_start(
 
 async fn perform_session_event(
     state: &ApiState,
-    input: AppendSessionEventRequest,
+    mut input: AppendSessionEventRequest,
 ) -> Result<AppendSessionEventResponse, DomainError> {
+    input.provider = normalize_provider_id(&input.provider)?;
+
     let mut tx = begin_tx(state, &state.scope).await?;
     let session = resolve_session(&mut tx, &state.scope, input.session_id).await?;
     if session.status != "active" {
@@ -1282,7 +1251,7 @@ async fn perform_session_event(
         &AppendSessionEventParams {
             session_id: session.id,
             project_id: session.project_id,
-            provider: input.provider,
+            provider: input.provider.clone(),
             event_type: canonical_event_type_str(input.event_type).to_string(),
             event_time: input.event_time.clone(),
             event_id: input.event_id.clone(),
@@ -1304,7 +1273,7 @@ async fn perform_session_event(
         inserted.event_id,
         json!({
             "duplicate": inserted.duplicate,
-            "provider": provider_str(input.provider),
+            "provider": input.provider,
             "eventType": canonical_event_type_str(input.event_type),
         }),
     )
@@ -1335,21 +1304,23 @@ async fn perform_session_events_batch(
     let batch_params: Vec<AppendSessionEventParams> = input
         .events
         .into_iter()
-        .map(|event| AppendSessionEventParams {
-            session_id: session.id,
-            project_id: session.project_id,
-            provider: event.provider,
-            event_type: canonical_event_type_str(event.event_type).to_string(),
-            event_time: event.event_time,
-            event_id: event.event_id,
-            idempotency_key: event.idempotency_key,
-            payload: sanitize_json_value(
-                serde_json::to_value(event.payload).expect("payload serializes"),
-            ),
-            raw_payload: sanitize_json_value(event.raw_payload),
-            turn_id: event.turn_id,
+        .map(|event| {
+            Ok(AppendSessionEventParams {
+                session_id: session.id,
+                project_id: session.project_id,
+                provider: normalize_provider_id(&event.provider)?,
+                event_type: canonical_event_type_str(event.event_type).to_string(),
+                event_time: event.event_time,
+                event_id: event.event_id,
+                idempotency_key: event.idempotency_key,
+                payload: sanitize_json_value(
+                    serde_json::to_value(event.payload).expect("payload serializes"),
+                ),
+                raw_payload: sanitize_json_value(event.raw_payload),
+                turn_id: event.turn_id,
+            })
         })
-        .collect();
+        .collect::<Result<_, DomainError>>()?;
 
     let inserted_rows = insert_session_events_batch(&mut tx, &state.scope, &batch_params).await?;
 
@@ -1390,21 +1361,23 @@ async fn perform_session_events_bulk(
     let batch_params: Vec<AppendSessionEventParams> = input
         .events
         .into_iter()
-        .map(|event| AppendSessionEventParams {
-            session_id: session.id,
-            project_id: session.project_id,
-            provider: event.provider,
-            event_type: canonical_event_type_str(event.event_type).to_string(),
-            event_time: event.event_time,
-            event_id: event.event_id,
-            idempotency_key: event.idempotency_key,
-            payload: sanitize_json_value(
-                serde_json::to_value(event.payload).expect("payload serializes"),
-            ),
-            raw_payload: sanitize_json_value(event.raw_payload),
-            turn_id: event.turn_id,
+        .map(|event| {
+            Ok(AppendSessionEventParams {
+                session_id: session.id,
+                project_id: session.project_id,
+                provider: normalize_provider_id(&event.provider)?,
+                event_type: canonical_event_type_str(event.event_type).to_string(),
+                event_time: event.event_time,
+                event_id: event.event_id,
+                idempotency_key: event.idempotency_key,
+                payload: sanitize_json_value(
+                    serde_json::to_value(event.payload).expect("payload serializes"),
+                ),
+                raw_payload: sanitize_json_value(event.raw_payload),
+                turn_id: event.turn_id,
+            })
         })
-        .collect();
+        .collect::<Result<_, DomainError>>()?;
 
     let (inserted, duplicates) =
         bulk_insert_session_events_copy(state.db.pool(), &state.scope, batch_params)
@@ -1465,7 +1438,6 @@ async fn perform_session_end(
             session.project_id,
             &session.provider,
             session.id,
-            session.repo_url.as_deref(),
             session.branch.as_deref(),
             &input,
         )
@@ -1546,6 +1518,7 @@ async fn perform_search(
     input: MemorySearchRequest,
 ) -> Result<MemorySearchEnvelope, DomainError> {
     let started = Instant::now();
+    let provider = normalize_optional_provider_id(input.provider.as_deref())?;
     let mut tx = begin_tx(state, &state.scope).await?;
     let lexical_rows = load_memory_search_rows(
         &mut tx,
@@ -1553,8 +1526,7 @@ async fn perform_search(
         &input.query,
         input.project_id,
         input.session_id,
-        input.provider.map(provider_str),
-        input.repo_url.as_ref().map(|value| value.as_str()),
+        provider.as_deref(),
         input.branch.as_deref(),
         input.from.as_deref(),
         input.to.as_deref(),
@@ -1574,11 +1546,10 @@ async fn perform_search(
     let semantic_hits = if input.mode == chum_mem_contracts::SearchMode::Lexical {
         Vec::new()
     } else {
-        semantic_search(&mut tx, &state.scope, &input).await?
+        semantic_search(&mut tx, &state.scope, &input, provider.as_deref()).await?
     };
     let mut ranking_context = RankingContext::default();
     ranking_context.session_id = input.session_id;
-    ranking_context.repo_url = input.repo_url.as_ref().map(|value| value.to_string());
     ranking_context.branch = input.branch.clone();
     ranking_context.retrieval_intent = input.retrieval_intent.unwrap_or_default();
     ranking_context.query_text = Some(input.query.clone());
@@ -1762,6 +1733,7 @@ async fn perform_context_build(
     state: &ApiState,
     input: ContextBuildRequest,
 ) -> Result<ContextBuildResponse, DomainError> {
+    let _provider = normalize_provider_id(&input.provider)?;
     let retrieval_intent = input
         .retrieval_intent
         .unwrap_or_else(|| infer_retrieval_intent(&input));
@@ -1839,6 +1811,7 @@ async fn perform_context_compile_v2(
     state: &ApiState,
     input: ContextBuildRequest,
 ) -> Result<ContextBuildResponse, DomainError> {
+    let _provider = normalize_provider_id(&input.provider)?;
     let retrieval_intent = input
         .retrieval_intent
         .unwrap_or_else(|| infer_retrieval_intent(&input));
@@ -1923,7 +1896,6 @@ async fn perform_context_memory_searches(
         project_id: input.project_id,
         session_id: None,
         provider: None,
-        repo_url: input.repo_url.clone(),
         branch: input.branch.clone(),
         types: Vec::new(),
         tags: Vec::new(),
@@ -1944,7 +1916,6 @@ async fn perform_context_memory_searches(
             project_id: input.project_id,
             session_id: None,
             provider: None,
-            repo_url: input.repo_url.clone(),
             branch: input.branch.clone(),
             types: scoped_types,
             tags: Vec::new(),
@@ -2771,7 +2742,6 @@ async fn derive_and_persist_session_memories(
     project_id: Uuid,
     provider: &str,
     session_id: Uuid,
-    repo_url: Option<&str>,
     branch: Option<&str>,
     end_request: &EndSessionRequest,
 ) -> Result<DerivedPersistenceResult, DomainError> {
@@ -2780,8 +2750,7 @@ async fn derive_and_persist_session_memories(
         .iter()
         .map(map_session_event_record)
         .collect::<Vec<_>>();
-    let episodes =
-        derive_session_episodes(session_id, parse_provider(provider), end_request, &records);
+    let episodes = derive_session_episodes(session_id, provider, end_request, &records);
     let batch_rows: Vec<chum_mem_db::EpisodeBatchRow> = episodes
         .iter()
         .map(|ep| chum_mem_db::EpisodeBatchRow {
@@ -2801,13 +2770,8 @@ async fn derive_and_persist_session_memories(
         .map(|ep| (ep.episode_ordinal, ep.id))
         .collect();
 
-    let drafts = derive_memories_from_session(
-        session_id,
-        parse_provider(provider),
-        end_request,
-        &records,
-        Some(&episodes),
-    );
+    let drafts =
+        derive_memories_from_session(session_id, provider, end_request, &records, Some(&episodes));
     let unresolved_risk = drafts.iter().any(|draft| {
         draft
             .metadata
@@ -3011,10 +2975,9 @@ async fn derive_and_persist_session_memories(
         .await?;
     }
 
-    let derived_session_edges = derive_and_persist_session_edges(
-        tx, context, project_id, session_id, repo_url, branch, &records,
-    )
-    .await?;
+    let derived_session_edges =
+        derive_and_persist_session_edges(tx, context, project_id, session_id, branch, &records)
+            .await?;
 
     Ok(DerivedPersistenceResult {
         derived_memories,
@@ -3044,7 +3007,6 @@ async fn derive_and_persist_session_edges(
     context: &RepositoryContext,
     project_id: Uuid,
     session_id: Uuid,
-    repo_url: Option<&str>,
     branch: Option<&str>,
     current_records: &[SessionEventRecord],
 ) -> Result<i32, DomainError> {
@@ -3061,10 +3023,8 @@ async fn derive_and_persist_session_edges(
             .collect::<Vec<_>>();
         let candidate_signals = chum_mem_pipeline::extract_session_signals(&candidate_records);
         if let Some(relationship) = score_session_relationship(
-            repo_url,
             branch,
             &current_signals,
-            candidate.repo_url.as_deref(),
             candidate.branch.as_deref(),
             &candidate_signals,
         ) {
@@ -3095,6 +3055,7 @@ async fn semantic_search(
     tx: &mut Transaction<'_, Postgres>,
     context: &RepositoryContext,
     input: &MemorySearchRequest,
+    provider: Option<&str>,
 ) -> Result<Vec<chum_mem_pipeline::SemanticQueryResult>, DomainError> {
     let query_vector = to_pgvector_literal(&embed_text(&input.query));
     let rows = sqlx::query_as::<_, MemorySearchRow>(
@@ -3129,7 +3090,6 @@ async fn semantic_search(
           m.confidence_score::float8 as confidence_score,
           m.superseded_at,
           m.created_at,
-          s.repo_url,
           s.branch,
           null::float8 as lexical_score,
           d.semantic_score,
@@ -3190,14 +3150,13 @@ async fn semantic_search(
         where m.organization_id = $1
           and m.team_id = $2
           and ($7::uuid is null or m.session_id = $7)
-          and ($8::text is null or s.provider = $8::public.provider_kind)
-          and ($9::text is null or s.repo_url = $9)
-          and ($10::text is null or s.branch = $10)
-          and ($11::timestamptz is null or m.created_at >= $11::timestamptz)
-          and ($12::timestamptz is null or m.created_at <= $12::timestamptz)
-          and (cardinality($13::text[]) = 0 or m.type::text = any($13))
+          and ($8::text is null or s.provider = $8)
+          and ($9::text is null or s.branch = $9)
+          and ($10::timestamptz is null or m.created_at >= $10::timestamptz)
+          and ($11::timestamptz is null or m.created_at <= $11::timestamptz)
+          and (cardinality($12::text[]) = 0 or m.type::text = any($12))
           and (
-            $15::boolean
+            $14::boolean
             or c.id is null
             or (
               c.admitted = true
@@ -3208,7 +3167,7 @@ async fn semantic_search(
             )
           )
         order by d.semantic_score desc, m.created_at desc
-        limit $14
+        limit $13
         "#,
     )
     .bind(context.organization_id)
@@ -3218,8 +3177,7 @@ async fn semantic_search(
     .bind(input.project_id)
     .bind((input.limit * 3) as i64)
     .bind(input.session_id)
-    .bind(input.provider.map(provider_str))
-    .bind(input.repo_url.as_ref().map(|value| value.as_str()))
+    .bind(provider)
     .bind(input.branch.as_deref())
     .bind(input.from.as_deref())
     .bind(input.to.as_deref())
@@ -3250,7 +3208,6 @@ async fn semantic_search(
                 "createdAt": format_time(row.created_at),
                 "sessionIds": row.session_id.into_iter().collect::<Vec<_>>(),
                 "sessionId": row.session_id,
-                "repoUrl": row.repo_url,
                 "branch": row.branch,
                 "importanceScore": row.importance_score,
                 "confidenceScore": row.confidence_score,
@@ -3317,7 +3274,6 @@ fn map_ranked_memory(row: &MemorySearchRow, lexical: bool) -> RankedMemory {
         freshness_penalty: None,
         superseded_penalty: None,
         community_score: None,
-        repo_url: row.repo_url.clone(),
         branch: row.branch.clone(),
         superseded_at: row.superseded_at.map(format_time),
         related_memory_ids: Vec::new(),
@@ -3371,7 +3327,6 @@ fn map_memory_detail_to_ranked_memory(row: &chum_mem_db::MemoryDetailRow) -> Ran
         freshness_penalty: None,
         superseded_penalty: None,
         community_score: None,
-        repo_url: None,
         branch: None,
         superseded_at: None,
         related_memory_ids: Vec::new(),
@@ -4398,20 +4353,32 @@ fn scoped_context(
     })
 }
 
-fn provider_str(provider: Provider) -> &'static str {
-    match provider {
-        Provider::Claude => "claude",
-        Provider::Codex => "codex",
-        Provider::Gemini => "gemini",
+fn normalize_provider_id(provider: &str) -> Result<String, DomainError> {
+    let normalized = provider.trim().to_ascii_lowercase();
+    if normalized.is_empty() {
+        return Err(DomainError::BadRequest(
+            "provider must be a non-empty AI client identifier".to_string(),
+        ));
     }
+    if normalized.len() > 64 {
+        return Err(DomainError::BadRequest(
+            "provider must be 64 characters or fewer".to_string(),
+        ));
+    }
+    if !normalized
+        .bytes()
+        .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
+    {
+        return Err(DomainError::BadRequest(
+            "provider may only contain ASCII letters, numbers, dot, underscore, or dash"
+                .to_string(),
+        ));
+    }
+    Ok(normalized)
 }
 
-fn parse_provider(provider: &str) -> Provider {
-    match provider {
-        "claude" => Provider::Claude,
-        "gemini" => Provider::Gemini,
-        _ => Provider::Codex,
-    }
+fn normalize_optional_provider_id(provider: Option<&str>) -> Result<Option<String>, DomainError> {
+    provider.map(normalize_provider_id).transpose()
 }
 
 fn canonical_event_type_str(event_type: chum_mem_contracts::CanonicalEventType) -> &'static str {
@@ -4704,8 +4671,8 @@ mod tests {
     use axum::http::Request;
     use chum_mem_contracts::{
         AppendSessionEventRequest, CanonicalEventType, ClaimRelationType, ContextBuildRequest,
-        DisclosureLevel, EndSessionRequest, MemorySearchRequest, Provider, RetrievalIntent,
-        SearchMode, SessionEventPayload, StartSessionRequest,
+        DisclosureLevel, EndSessionRequest, MemorySearchRequest, RetrievalIntent, SearchMode,
+        SessionEventPayload, StartSessionRequest,
     };
     use serde_json::json;
     use std::env;
@@ -4745,6 +4712,13 @@ mod tests {
             mcp_sessions: Arc::new(RwLock::new(HashSet::new())),
             community_cache: Arc::new(RwLock::new(CommunityCache::default())),
         }
+    }
+
+    #[test]
+    fn provider_id_accepts_non_bundled_clients() {
+        assert_eq!(normalize_provider_id("Cursor").unwrap(), "cursor");
+        assert_eq!(normalize_provider_id("aider_2").unwrap(), "aider_2");
+        assert!(normalize_provider_id("claude code").is_err());
     }
 
     #[tokio::test]
@@ -4873,7 +4847,7 @@ mod tests {
         let started = perform_session_start(
             state,
             StartSessionRequest {
-                provider: Provider::Codex,
+                provider: "codex".to_string(),
                 project_id: state
                     .scope
                     .project_id
@@ -4894,7 +4868,7 @@ mod tests {
                     session_id: started.session_id,
                     event_id: format!("{external_session_id}-event-{index}"),
                     idempotency_key: format!("{external_session_id}-key-{index}"),
-                    provider: Provider::Codex,
+                    provider: "codex".to_string(),
                     event_type: *event_type,
                     event_time: format!("2026-04-14T00:00:{:02}Z", index),
                     payload: SessionEventPayload {
@@ -5028,7 +5002,6 @@ mod tests {
                 project_id: state.scope.project_id,
                 session_id: None,
                 provider: None,
-                repo_url: None,
                 branch: None,
                 types: Vec::new(),
                 tags: Vec::new(),
@@ -5064,7 +5037,6 @@ mod tests {
                 project_id: state.scope.project_id,
                 session_id: None,
                 provider: None,
-                repo_url: None,
                 branch: None,
                 types: Vec::new(),
                 tags: Vec::new(),
@@ -5128,7 +5100,6 @@ mod tests {
                 project_id: state.scope.project_id,
                 session_id: None,
                 provider: None,
-                repo_url: None,
                 branch: None,
                 types: Vec::new(),
                 tags: Vec::new(),
@@ -5169,12 +5140,11 @@ mod tests {
         let context = perform_context_build(
             &state,
             ContextBuildRequest {
-                provider: Provider::Codex,
+                provider: "codex".to_string(),
                 objective: "What is the current checkout cache setting?".to_string(),
                 retrieval_intent: Some(RetrievalIntent::MemoryOnly),
                 include_historical: Some(false),
                 project_id: state.scope.project_id,
-                repo_url: None,
                 branch: None,
                 file_paths: Vec::new(),
                 max_token_budget: 600,

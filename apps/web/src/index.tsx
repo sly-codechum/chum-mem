@@ -132,7 +132,6 @@ interface SessionListRow {
   id: string;
   provider: string;
   external_session_id: string;
-  repo_url: string | null;
   branch: string | null;
   status: string;
   started_at: string;
@@ -174,7 +173,6 @@ app.get('/api/dashboard/sessions', async (req, res) => {
           s.id::text                   AS id,
           s.provider::text             AS provider,
           s.external_session_id        AS external_session_id,
-          s.repo_url                   AS repo_url,
           s.branch                     AS branch,
           s.status::text               AS status,
           s.started_at::text           AS started_at,
@@ -193,7 +191,6 @@ app.get('/api/dashboard/sessions', async (req, res) => {
         AND (
           ${likePattern}::text IS NULL
           OR s.external_session_id ILIKE ${likePattern}
-          OR COALESCE(s.repo_url, '') ILIKE ${likePattern}
           OR COALESCE(s.branch, '') ILIKE ${likePattern}
         )
         ORDER BY s.started_at DESC, s.id DESC
@@ -212,7 +209,6 @@ app.get('/api/dashboard/sessions', async (req, res) => {
           id: r.id,
           provider: r.provider,
           externalSessionId: r.external_session_id,
-          repoUrl: r.repo_url,
           branch: r.branch,
           status: r.status,
           startedAt: r.started_at,
@@ -412,7 +408,6 @@ app.get('/api/dashboard/workers', async (_req, res) => {
 interface ProjectRow {
   id: string;
   name: string;
-  repo_url: string | null;
   created_at: string;
 }
 
@@ -423,7 +418,6 @@ app.get('/api/projects', async (_req, res) => {
         SELECT
           id::text        AS id,
           name            AS name,
-          repo_url        AS repo_url,
           created_at::text AS created_at
         FROM public.projects
         WHERE slug != 'global'
@@ -436,7 +430,6 @@ app.get('/api/projects', async (_req, res) => {
         projects: rows.map((r) => ({
           id: r.id,
           name: r.name,
-          repoUrl: r.repo_url,
           createdAt: r.created_at,
         })),
       }),

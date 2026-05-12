@@ -105,7 +105,6 @@ export const memorySearchRequestSchema = paginationSchema.extend({
   projectId: z.string().uuid().optional(),
   sessionId: z.string().uuid().optional(),
   provider: providerSchema.optional(),
-  repoUrl: z.string().url().optional(),
   branch: z.string().min(1).optional(),
   types: z.array(memoryTypeSchema).default([]),
   tags: z.array(z.string().min(1)).default([]),

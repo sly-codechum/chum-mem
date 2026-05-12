@@ -1,4 +1,4 @@
-use chum_mem_contracts::{Provider, StartSessionRequest};
+use chum_mem_contracts::StartSessionRequest;
 use serde_json::{Value, json};
 use sqlx::FromRow;
 use sqlx::Transaction;
@@ -23,7 +23,6 @@ pub struct SessionRow {
     pub project_id: Uuid,
     pub external_session_id: String,
     pub status: String,
-    pub repo_url: Option<String>,
     pub branch: Option<String>,
 }
 
@@ -31,7 +30,7 @@ pub struct SessionRow {
 pub struct AppendSessionEventParams {
     pub session_id: Uuid,
     pub project_id: Uuid,
-    pub provider: Provider,
+    pub provider: String,
     pub event_type: String,
     pub event_time: String,
     pub event_id: String,
@@ -86,7 +85,6 @@ pub struct SessionEndResult {
 #[derive(Debug, Clone, FromRow)]
 pub struct CandidateSessionRow {
     pub id: Uuid,
-    pub repo_url: Option<String>,
     pub branch: Option<String>,
 }
 
@@ -104,7 +102,6 @@ pub struct MemorySearchRow {
     pub confidence_score: f64,
     pub superseded_at: Option<time::OffsetDateTime>,
     pub created_at: time::OffsetDateTime,
-    pub repo_url: Option<String>,
     pub branch: Option<String>,
     pub lexical_score: Option<f64>,
     pub semantic_score: Option<f64>,
@@ -368,8 +365,8 @@ pub async fn ensure_scope_entities(
     if let Some(project_id) = context.project_id {
         sqlx::query(
             r#"
-            insert into public.projects (id, organization_id, team_id, name, slug, repo_url, default_branch)
-            values ($1, $2, $3, 'Default Project', 'default-project', null, null)
+            insert into public.projects (id, organization_id, team_id, name, slug, default_branch)
+            values ($1, $2, $3, 'Default Project', 'default-project', null)
             on conflict do nothing
             "#,
         )
@@ -387,7 +384,6 @@ pub async fn upsert_ingested_project(
     tx: &mut Transaction<'_, Postgres>,
     context: &RepositoryContext,
     project_id: Uuid,
-    repo_url: Option<&str>,
     branch: Option<&str>,
 ) -> Result<(), DbError> {
     let slug = format!("project-{}", project_id.simple());
@@ -396,8 +392,8 @@ pub async fn upsert_ingested_project(
     // (team_id, slug) constraints without aborting the transaction.
     sqlx::query(
         r#"
-        insert into public.projects (id, organization_id, team_id, name, slug, repo_url, default_branch)
-        values ($1, $2, $3, 'Ingested Project', $4, $5, $6)
+        insert into public.projects (id, organization_id, team_id, name, slug, default_branch)
+        values ($1, $2, $3, 'Ingested Project', $4, $5)
         on conflict do nothing
         "#,
     )
@@ -405,24 +401,19 @@ pub async fn upsert_ingested_project(
     .bind(context.organization_id)
     .bind(context.team_id)
     .bind(slug)
-    .bind(repo_url)
     .bind(branch)
     .execute(&mut **tx)
     .await?;
 
     // Update the existing row (if insert was skipped due to conflict).
-    // Exclude the global project (slug = 'global') to prevent stamping a
-    // repo-specific URL onto the shared fallback project.
     sqlx::query(
         r#"
         update public.projects
-        set repo_url = coalesce($2, repo_url),
-            default_branch = coalesce($3, default_branch)
+        set default_branch = coalesce($2, default_branch)
         where id = $1 and slug != 'global'
         "#,
     )
     .bind(project_id)
-    .bind(repo_url)
     .bind(branch)
     .execute(&mut **tx)
     .await?;
@@ -451,16 +442,14 @@ pub async fn upsert_session(
           user_id,
           provider,
           external_session_id,
-          repo_url,
           branch,
           status,
           metadata
         )
-        values ($1, $2, $3, $4, $5::public.provider_kind, $6, $7, $8, 'active'::public.session_status, $9)
+        values ($1, $2, $3, $4, $5, $6, $7, 'active'::public.session_status, $8)
         on conflict (project_id, provider, external_session_id)
         do update set
           status = 'active'::public.session_status,
-          repo_url = excluded.repo_url,
           branch = excluded.branch,
           metadata = excluded.metadata
         returning id, organization_id, team_id, project_id, status::text as status
@@ -470,13 +459,8 @@ pub async fn upsert_session(
     .bind(context.team_id)
     .bind(input.project_id)
     .bind(context.actor_id)
-    .bind(match input.provider {
-        Provider::Claude => "claude",
-        Provider::Codex => "codex",
-        Provider::Gemini => "gemini",
-    })
+    .bind(input.provider.as_str())
     .bind(&input.external_session_id)
-    .bind(input.repo.repo_url.as_ref().map(|value| value.as_str()))
     .bind(input.repo.branch.as_deref())
     .bind(Value::Object(metadata))
     .fetch_one(&mut **tx)
@@ -541,7 +525,6 @@ pub async fn resolve_session(
           project_id,
           external_session_id,
           status::text as status,
-          repo_url,
           branch
         from public.sessions
         where id = $1
@@ -582,7 +565,7 @@ pub async fn insert_session_event(
           raw_payload,
           turn_id
         )
-        values ($1, $2, $3, $4, $5::public.provider_kind, $6, $7::timestamptz, $8, $9, $10, $11, $12)
+        values ($1, $2, $3, $4, $5, $6, $7::timestamptz, $8, $9, $10, $11, $12)
         on conflict do nothing
         returning id
         "#,
@@ -591,11 +574,7 @@ pub async fn insert_session_event(
     .bind(context.team_id)
     .bind(params.project_id)
     .bind(params.session_id)
-    .bind(match params.provider {
-        Provider::Claude => "claude",
-        Provider::Codex => "codex",
-        Provider::Gemini => "gemini",
-    })
+    .bind(params.provider.as_str())
     .bind(&params.event_type)
     .bind(&params.event_time)
     .bind(&params.event_id)
@@ -669,12 +648,7 @@ pub async fn insert_session_events_batch(
             .push_bind(context.team_id)
             .push_bind(row.project_id)
             .push_bind(row.session_id);
-        b.push_bind(match row.provider {
-            Provider::Claude => "claude",
-            Provider::Codex => "codex",
-            Provider::Gemini => "gemini",
-        });
-        b.push_unseparated("::public.provider_kind");
+        b.push_bind(row.provider.as_str());
         b.push_bind(&row.event_type);
         b.push_bind(&row.event_time);
         b.push_unseparated("::timestamptz");
@@ -841,11 +815,7 @@ pub async fn bulk_insert_session_events_copy(
     // Build CSV payload in memory. For typical batch sizes (200-2000) this is fine.
     let mut csv_buf = String::with_capacity(total * 512);
     for row in &params {
-        let provider_str = match row.provider {
-            Provider::Claude => "claude",
-            Provider::Codex => "codex",
-            Provider::Gemini => "gemini",
-        };
+        let provider_str = row.provider.as_str();
         let payload_json = row.payload.to_string();
         let raw_payload_json = row.raw_payload.to_string();
         let turn_id = row.turn_id.as_deref().unwrap_or("");
@@ -900,7 +870,7 @@ pub async fn bulk_insert_session_events_copy(
            (organization_id, team_id, project_id, session_id, provider, event_type, \
             event_time, event_id, idempotency_key, payload, raw_payload, turn_id) \
          SELECT organization_id, team_id, project_id, session_id, \
-                provider::public.provider_kind, event_type, event_time, \
+                provider, event_type, event_time, \
                 event_id, idempotency_key, payload, raw_payload, \
                 NULLIF(turn_id, '') \
          FROM public.{staging} \
@@ -1226,7 +1196,7 @@ pub async fn load_candidate_completed_sessions(
 ) -> Result<Vec<CandidateSessionRow>, DbError> {
     sqlx::query_as::<_, CandidateSessionRow>(
         r#"
-        select id, repo_url, branch
+        select id, branch
         from public.sessions
         where organization_id = $1
           and team_id = $2
@@ -1984,7 +1954,6 @@ pub async fn load_memory_search_rows(
     project_id: Option<Uuid>,
     session_id: Option<Uuid>,
     provider: Option<&str>,
-    repo_url: Option<&str>,
     branch: Option<&str>,
     from: Option<&str>,
     to: Option<&str>,
@@ -2007,7 +1976,6 @@ pub async fn load_memory_search_rows(
           m.confidence_score::float8 as confidence_score,
           m.superseded_at,
           m.created_at,
-          s.repo_url,
           s.branch,
           ts_rank_cd(m.search_vector, websearch_to_tsquery('english', $4))::float8 as lexical_score,
           null::float8 as semantic_score,
@@ -2069,16 +2037,15 @@ pub async fn load_memory_search_rows(
           and ($3::uuid is null or m.project_id = $3)
           and ($5::uuid is null or m.project_id = $5)
           and ($6::uuid is null or m.session_id = $6)
-          and ($7::text is null or s.provider = $7::public.provider_kind)
-          and ($8::text is null or s.repo_url = $8)
-          and ($9::text is null or s.branch = $9)
-          and ($10::timestamptz is null or m.created_at >= $10::timestamptz)
-          and ($11::timestamptz is null or m.created_at <= $11::timestamptz)
-          and (cardinality($12::text[]) = 0 or m.type::text = any($12))
+          and ($7::text is null or s.provider = $7)
+          and ($8::text is null or s.branch = $8)
+          and ($9::timestamptz is null or m.created_at >= $9::timestamptz)
+          and ($10::timestamptz is null or m.created_at <= $10::timestamptz)
+          and (cardinality($11::text[]) = 0 or m.type::text = any($11))
           -- v2.2.2: Also filter by claim_type when type filter is specified
-          and (cardinality($12::text[]) = 0 or c.id is null or c.claim_type::text = any($12))
+          and (cardinality($11::text[]) = 0 or c.id is null or c.claim_type::text = any($11))
           and (
-            $14::boolean
+            $13::boolean
             or c.id is null
             or (
               c.admitted = true
@@ -2090,7 +2057,7 @@ pub async fn load_memory_search_rows(
           )
           and m.search_vector @@ websearch_to_tsquery('english', $4)
         order by lexical_score desc, m.created_at desc
-        limit $13
+        limit $12
         "#,
     )
     .bind(context.organization_id)
@@ -2100,7 +2067,6 @@ pub async fn load_memory_search_rows(
     .bind(project_id)
     .bind(session_id)
     .bind(provider)
-    .bind(repo_url)
     .bind(branch)
     .bind(from)
     .bind(to)
@@ -2422,7 +2388,6 @@ pub async fn load_memories_for_chroma_scoped(
           m.confidence_score::float8 as confidence_score,
           m.superseded_at,
           m.created_at,
-          s.repo_url,
           s.branch,
           null::float8 as lexical_score,
           null::float8 as semantic_score,

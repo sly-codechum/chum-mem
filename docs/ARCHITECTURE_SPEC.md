@@ -2,7 +2,7 @@
 
 ## 1. Objective
 
-`chum-mem` is a multi-tenant persistent memory system for coding agents. It ingests normalized provider events from Claude, Codex, and Gemini clients, derives typed durable claims with proof, stores them in PostgreSQL-backed tenant-safe data structures, and serves compact evidence through MCP tools and API endpoints.
+`chum-mem` is a multi-tenant persistent memory system for coding agents. It ingests normalized provider events from any AI client that implements the canonical session contract, derives typed durable claims with proof, stores them in PostgreSQL-backed tenant-safe data structures, and serves compact evidence through MCP tools and API endpoints.
 
 The current target architecture is v2.2.3 PCKC:
 
@@ -48,7 +48,7 @@ The repo’s primary runtime is Rust:
 - `rust/apps/worker`: background jobs and graph persistence
 - `rust/crates/chum_mem_pipeline`: derivation, retrieval, graph, and compilation logic
 - `rust/crates/chum_mem_db`: SQL-backed data access and reconciliation
-- `rust/crates/chum_mem_contracts`: shared contracts and enums
+- `rust/crates/chum_mem_contracts`: shared contracts and canonical enums
 
 Supporting surfaces:
 
@@ -61,7 +61,7 @@ PostgreSQL remains the durable source of truth. Chroma is used for typed embeddi
 ## 4. High-level architecture
 
 ```text
-Claude / Codex / Gemini clients
+AI clients: Claude / Codex / Gemini / others
         |
         v
 Provider adapters / plugin hooks
@@ -215,6 +215,11 @@ Requirements:
 
 All providers must normalize into the same ingestion and retrieval contract.
 
+Provider identity is an open lowercase client identifier such as `codex`,
+`claude`, `gemini`, or `cursor`. It is stored as metadata and can be used as an
+optional retrieval filter; tenant, project, and session IDs remain the access
+and continuity boundaries.
+
 Normalization goals:
 
 - preserve the raw provider payload
@@ -355,7 +360,9 @@ These layers are stored separately through `snapshot_type` and queried independe
 
 ### 10.2 Repository layer
 
-The repository layer is AST-derived and should include:
+The repository layer is AST-derived, project-id scoped, and independent of Git remotes or hosted repository URLs. Local folders without a `.git` directory must still sync and query under their resolved `projectId`.
+
+The repository layer should include:
 
 - files
 - symbols
@@ -769,4 +776,4 @@ The architecture is acceptable when:
 - repository questions can be answered from repository graph evidence
 - context packs are compact, provenance-aware, and budget-disciplined
 - contradictions and supersession are surfaced correctly
-- the same normalized APIs serve Claude, Codex, and Gemini clients
+- the same normalized APIs serve Claude, Codex, Gemini, and additional AI clients

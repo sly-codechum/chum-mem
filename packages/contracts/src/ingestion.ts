@@ -16,7 +16,6 @@ export const canonicalEventTypeSchema = z.enum([
 export type CanonicalEventType = z.infer<typeof canonicalEventTypeSchema>;
 
 export const repoContextSchema = z.object({
-  repoUrl: z.string().url().optional(),
   repoName: z.string().min(1).optional(),
   branch: z.string().min(1).optional(),
   commitSha: z.string().min(7).max(64).optional(),

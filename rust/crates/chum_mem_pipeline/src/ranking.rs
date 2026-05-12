@@ -50,8 +50,6 @@ pub struct RankedMemory {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub community_score: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub repo_url: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub branch: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub superseded_at: Option<String>,
@@ -100,7 +98,6 @@ pub type RankingContext = RankingContextInner;
 #[derive(Debug, Clone, Default)]
 pub struct RankingContextInner {
     pub session_id: Option<Uuid>,
-    pub repo_url: Option<String>,
     pub branch: Option<String>,
     pub session_graph_weights: HashMap<Uuid, f64>,
     pub retrieval_intent: RetrievalIntent,
@@ -210,7 +207,6 @@ pub fn merge_hybrid_results(
                 freshness_penalty: None,
                 superseded_penalty: None,
                 community_score: None,
-                repo_url: metadata_string(&metadata, "repoUrl"),
                 branch: metadata_string(&metadata, "branch"),
                 superseded_at: metadata_string(&metadata, "supersededAt"),
                 related_memory_ids: Vec::new(),
@@ -609,9 +605,6 @@ fn calculate_session_relevance(hit: &RankedMemory, context: &RankingContext) -> 
     if context.branch.is_some() && context.branch == hit.branch {
         score += 0.45;
     }
-    if context.repo_url.is_some() && context.repo_url == hit.repo_url {
-        score += 0.2;
-    }
     score.min(1.0)
 }
 
@@ -839,7 +832,6 @@ mod tests {
             freshness_penalty: None,
             superseded_penalty: None,
             community_score: None,
-            repo_url: None,
             branch: None,
             superseded_at: None,
             related_memory_ids: Vec::new(),

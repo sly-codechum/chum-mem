@@ -14,11 +14,12 @@ The product should capture session activity, derive durable typed memory with pr
 
 ## Scope
 
-Support these clients as first-class providers:
+Support normalized AI clients as first-class providers. Claude, Codex, and Gemini are bundled clients, but provider identity must remain an open client identifier rather than a closed enum:
 
 - Claude
 - Codex
 - Gemini
+- any additional client that emits the canonical session contract
 
 Run `chum-mem` as:
 
@@ -28,7 +29,7 @@ Run `chum-mem` as:
 
 ## Core loop
 
-1. Capture normalized session events, tool calls, prompts, outputs, files touched, git metadata, and optional summaries.
+1. Capture normalized session events, tool calls, prompts, outputs, files touched, local project metadata, and optional summaries.
 2. Derive typed claims and supporting memories from those events.
 3. Attach proof, authority, verification status, and temporal validity.
 4. Build repository and session knowledge graphs.
@@ -198,7 +199,7 @@ File-level search tools are fallback only after the report, repository query, an
 - typed retrieval and graph-aware ranking
 - hard-budget proof compilation
 - knowledge report and graph inspection surfaces
-- provider adapters for Claude, Codex, and Gemini
+- provider adapters for Claude, Codex, Gemini, and other normalized clients
 
 ### Priority 3
 

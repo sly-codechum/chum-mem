@@ -8,7 +8,7 @@
 
 set -uo pipefail
 
-ROOT_DIR="${1:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
+ROOT_DIR="${1:-$PWD}"
 API_URL="${2:-${CHUM_MEMORY_API_URL:-http://localhost:63001}}"
 CACHE_DIR="${ROOT_DIR}/.chum-cache"
 RULES_FILE="${CACHE_DIR}/sync-rules.json"
@@ -31,7 +31,7 @@ STATE_FILE=$(mktemp /tmp/chum-sync-state.XXXXXX)
 trap 'rm -f "$PAYLOAD_FILE" "$STATE_FILE"' EXIT
 
 RESULT=$(python3 -s - "$CACHE_DIR" "$RULES_FILE" "$PROJECT_ID" "$PAYLOAD_FILE" "$STATE_FILE" <<'PYTHON'
-import base64, hashlib, json, mimetypes, os, subprocess, sys, fnmatch
+import base64, hashlib, json, mimetypes, os, sys, fnmatch
 
 cache_dir, rules_file, project_id, payload_file, state_file = sys.argv[1:6]
 manifest_file = os.path.join(cache_dir, "manifest.tsv")
@@ -42,39 +42,40 @@ with open(rules_file) as f:
 
 valid_exts = set(rules.get("codeExtensions", []) + rules.get("docExtensions", []))
 binary_exts = set(rules.get("binaryExtensions", []))
+ignore_dirs = set(rules.get("ignoreDirs", []))
+ignore_dirs.add(".chum-cache")
 ignore_files = set(rules.get("ignoreFiles", []))
 ignore_patterns = rules.get("ignorePatterns", [])
 max_size = rules.get("maxFileSizeBytes", 262144)
 max_binary_size = rules.get("maxBinaryFileSizeBytes", 16 * 1024 * 1024)
 
-try:
-    out = subprocess.check_output(
-        ["git", "ls-files", "--cached", "--others", "--exclude-standard"],
-        stderr=subprocess.DEVNULL, text=True
-    )
-except subprocess.CalledProcessError:
-    out = ""
-
 eligible = []
-for filepath in out.strip().splitlines():
-    if not filepath:
-        continue
-    basename = os.path.basename(filepath)
-    ext = filepath.rsplit(".", 1)[-1].lower() if "." in filepath else ""
-    if ext not in valid_exts or basename in ignore_files:
-        continue
-    if any(fnmatch.fnmatch(basename, pat) for pat in ignore_patterns):
-        continue
-    if not os.path.isfile(filepath):
-        continue
-    try:
-        size = os.path.getsize(filepath)
-        limit = max_binary_size if ext in binary_exts else max_size
-        if size > limit:
+for root, dirs, files in os.walk(".", topdown=True):
+    dirs[:] = [
+        d for d in dirs
+        if d not in ignore_dirs
+        and not any(fnmatch.fnmatch(d, pat) for pat in ignore_patterns)
+    ]
+    rel_root = os.path.relpath(root, ".")
+    for filename in files:
+        filepath = filename if rel_root == "." else os.path.join(rel_root, filename)
+        filepath = filepath.replace(os.sep, "/")
+        basename = os.path.basename(filepath)
+        ext = filepath.rsplit(".", 1)[-1].lower() if "." in filepath else ""
+        if ext not in valid_exts or basename in ignore_files:
             continue
-    except OSError:
-        continue
-    eligible.append(filepath)
+        if any(fnmatch.fnmatch(basename, pat) or fnmatch.fnmatch(filepath, pat) for pat in ignore_patterns):
+            continue
+        if not os.path.isfile(filepath):
+            continue
+        try:
+            size = os.path.getsize(filepath)
+            limit = max_binary_size if ext in binary_exts else max_size
+            if size > limit:
+                continue
+        except OSError:
+            continue
+        eligible.append(filepath)
 
 current = {}
 for filepath in eligible:

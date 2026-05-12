@@ -70,11 +70,10 @@ Revokes a token for the caller's team.
 
 Request fields:
 
-- `provider`
+- `provider`: open lowercase AI client identifier, for example `codex`, `claude`, `gemini`, or `cursor`
 - `projectId`
 - `externalSessionId`
-- repo metadata
-- branch metadata
+- optional local repo metadata (`repoName`, `branch`, `commitSha`, `filePaths`)
 - provider metadata
 - optional local environment metadata
 
@@ -122,7 +121,7 @@ Request fields:
 
 - query string
 - optional `projectId`
-- optional `provider`
+- optional `provider` client identifier filter
 - optional repo and branch filters
 - optional memory type and time filters
 - result limit
@@ -149,7 +148,7 @@ Returns:
 Request fields:
 
 - objective
-- `provider`
+- `provider`: requesting AI client identifier
 - optional `projectId`
 - optional repo, branch, and file paths
 - `maxTokenBudget`
@@ -197,6 +196,7 @@ Builds a repository knowledge graph from a local project directory using tree-si
 **Response**: `{ status, projectId, importedRoot, mergedWithExisting, stats: { totalFiles, processedFiles }, graphSummary: { nodeCount, edgeCount, communityCount, evidenceDistribution } }`
 
 Stores the result as `snapshot_type = "repository"`. Only merges with other repository snapshots, never session snapshots.
+Repository identity is `projectId`; hosted repository URLs and Git remotes are not required for sync or graph queries.
 
 ### `knowledge_report`
 

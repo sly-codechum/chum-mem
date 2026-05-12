@@ -8,16 +8,14 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
-use url::Url;
 use uuid::Uuid;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Provider {
-    Claude,
-    Codex,
-    Gemini,
-}
+/// Open client/provider identifier used for ingestion and optional filtering.
+///
+/// Historically this was a closed enum for Claude/Codex/Gemini. The session
+/// layer is provider-neutral: any normalized AI client can write/query session
+/// memory as long as tenant and project scope pass.
+pub type Provider = String;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -254,7 +252,6 @@ pub enum ContextSourceClass {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct RepoContext {
-    pub repo_url: Option<Url>,
     pub repo_name: Option<String>,
     pub branch: Option<String>,
     pub commit_sha: Option<String>,
@@ -426,7 +423,6 @@ pub struct MemorySearchRequest {
     pub project_id: Option<Uuid>,
     pub session_id: Option<Uuid>,
     pub provider: Option<Provider>,
-    pub repo_url: Option<Url>,
     pub branch: Option<String>,
     #[serde(default)]
     pub types: Vec<MemoryType>,
@@ -520,7 +516,6 @@ pub struct ContextBuildRequest {
     pub retrieval_intent: Option<RetrievalIntent>,
     pub include_historical: Option<bool>,
     pub project_id: Option<Uuid>,
-    pub repo_url: Option<Url>,
     pub branch: Option<String>,
     #[serde(default)]
     pub file_paths: Vec<String>,
@@ -789,6 +784,8 @@ pub trait ValidateInput {
 
 impl ValidateInput for StartSessionRequest {
     fn validate(&self) -> Result<(), ValidationError> {
+        require_non_blank("provider", &self.provider)?;
+        ensure_max_len("provider", &self.provider, 64)?;
         require_non_blank("externalSessionId", &self.external_session_id)?;
         ensure_max_len("externalSessionId", &self.external_session_id, 256)?;
         for file_path in &self.repo.file_paths {
@@ -800,6 +797,8 @@ impl ValidateInput for StartSessionRequest {
 
 impl ValidateInput for AppendSessionEventRequest {
     fn validate(&self) -> Result<(), ValidationError> {
+        require_non_blank("provider", &self.provider)?;
+        ensure_max_len("provider", &self.provider, 64)?;
         require_non_blank("eventId", &self.event_id)?;
         ensure_max_len("eventId", &self.event_id, 256)?;
         require_non_blank("idempotencyKey", &self.idempotency_key)?;
@@ -969,7 +968,6 @@ mod tests {
             project_id: None,
             session_id: None,
             provider: None,
-            repo_url: None,
             branch: None,
             types: Vec::new(),
             tags: Vec::new(),
@@ -995,7 +993,7 @@ mod tests {
             session_id: Uuid::nil(),
             event_id: "evt-123".to_string(),
             idempotency_key: "abcdefgh".to_string(),
-            provider: Provider::Codex,
+            provider: "cursor".to_string(),
             event_type: CanonicalEventType::Command,
             event_time: "2026-04-10T12:00:00Z".to_string(),
             payload: SessionEventPayload::default(),

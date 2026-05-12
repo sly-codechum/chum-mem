@@ -1,9 +1,7 @@
 use indexmap::IndexMap;
 use std::collections::HashSet;
 
-use chum_mem_contracts::{
-    CanonicalEventType, EndSessionRequest, MemoryType, Provider, SessionEventPayload,
-};
+use chum_mem_contracts::{CanonicalEventType, EndSessionRequest, MemoryType, SessionEventPayload};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use uuid::Uuid;
@@ -63,7 +61,7 @@ pub struct SessionRelationshipScore {
 
 pub fn derive_session_episodes(
     session_id: Uuid,
-    provider: Provider,
+    provider: &str,
     end_request: &EndSessionRequest,
     events: &[SessionEventRecord],
 ) -> Vec<SessionEpisodeDraft> {
@@ -99,7 +97,7 @@ pub fn derive_session_episodes(
 
 pub fn derive_memories_from_session(
     session_id: Uuid,
-    provider: Provider,
+    provider: &str,
     end_request: &EndSessionRequest,
     events: &[SessionEventRecord],
     episodes: Option<&[SessionEpisodeDraft]>,
@@ -225,22 +223,13 @@ pub fn extract_session_signals(events: &[SessionEventRecord]) -> SessionSimilari
 }
 
 pub fn score_session_relationship(
-    current_repo_url: Option<&str>,
     current_branch: Option<&str>,
     current_signals: &SessionSimilaritySignals,
-    candidate_repo_url: Option<&str>,
     candidate_branch: Option<&str>,
     candidate_signals: &SessionSimilaritySignals,
 ) -> Option<SessionRelationshipScore> {
     let mut weight = 0.0;
     let mut reasons = Vec::new();
-
-    let current_repo = current_repo_url.filter(|s| !s.is_empty());
-    let candidate_repo = candidate_repo_url.filter(|s| !s.is_empty());
-    if current_repo.is_some() && candidate_repo.is_some() && current_repo == candidate_repo {
-        weight += 0.2;
-        reasons.push("same_repo".to_string());
-    }
 
     let current_br = current_branch.filter(|s| !s.is_empty());
     let candidate_br = candidate_branch.filter(|s| !s.is_empty());
@@ -315,12 +304,8 @@ pub fn embed_text(text: &str) -> Vec<f64> {
     vector.into_iter().map(|value| value / magnitude).collect()
 }
 
-fn provider_str(provider: Provider) -> &'static str {
-    match provider {
-        Provider::Claude => "claude",
-        Provider::Codex => "codex",
-        Provider::Gemini => "gemini",
-    }
+fn provider_str(provider: &str) -> &str {
+    provider
 }
 
 fn derive_atomic_claim_memories(
@@ -1160,7 +1145,7 @@ mod tests {
         };
 
         let memories =
-            derive_memories_from_session(session_id, Provider::Codex, &end_request, &events, None);
+            derive_memories_from_session(session_id, "codex", &end_request, &events, None);
 
         assert!(
             memories
@@ -1191,7 +1176,7 @@ mod tests {
         };
 
         let memories =
-            derive_memories_from_session(session_id, Provider::Codex, &end_request, &events, None);
+            derive_memories_from_session(session_id, "codex", &end_request, &events, None);
 
         assert!(!memories.iter().any(|memory| {
             memory.memory_type == MemoryType::OpenQuestion
@@ -1224,7 +1209,7 @@ mod tests {
         };
 
         let memories =
-            derive_memories_from_session(session_id, Provider::Codex, &end_request, &events, None);
+            derive_memories_from_session(session_id, "codex", &end_request, &events, None);
 
         assert!(memories.iter().any(|memory| {
             memory.memory_type == MemoryType::Task
@@ -1267,7 +1252,7 @@ mod tests {
 
         let memories = derive_memories_from_session(
             session_id,
-            Provider::Codex,
+            "codex",
             &end_request_default(session_id),
             &events,
             None,
@@ -1296,7 +1281,7 @@ mod tests {
 
         let memories = derive_memories_from_session(
             session_id,
-            Provider::Codex,
+            "codex",
             &end_request_default(session_id),
             &events,
             None,
@@ -1326,7 +1311,7 @@ mod tests {
 
         let memories = derive_memories_from_session(
             session_id,
-            Provider::Codex,
+            "codex",
             &end_request_default(session_id),
             &events,
             None,
