@@ -206,7 +206,7 @@ The host hook (Claude Code or Codex) calls `session_start` → `session_event_ap
   - `disclosureLevel`: `overview` (default, compact hits) → `related` (hits + related claims) → `full` (hits + full proof handles). Escalate only when proof matters.
 - `memory_get(id*)` — single fetch, returns full proof object
 - `memory_get_batch(ids* [1–20])` — **always prefer over loops**
-- `context_build(provider*, objective*, maxTokenBudget*≤64000, filePaths, repoUrl, branch)` — compiles a minimal proof set for the objective
+- `context_build(provider*, objective*, maxTokenBudget*≤64000, filePaths, projectId, branch)` — compiles a minimal proof set for the objective
 
 **Knowledge graph**
 - `knowledge_query(query*={hub_nodes|shortest_path|neighbors|communities|search|goal_directed}, layer*={repository|session}, nodeId, targetNodeId, text, depth=1..5)`
@@ -217,6 +217,7 @@ The host hook (Claude Code or Codex) calls `session_start` → `session_event_ap
 - `repository_sync(files*, manifest, removedPaths, mergeWithExisting, projectId)` — *hook calls this; do not invoke unless forcing a re-sync*
 
 **Session (hook-managed)**
+- `provider` is an open lowercase AI client identifier, not a closed enum.
 - `session_start(provider*, projectId*, externalSessionId*, repo, local)`
 - `session_event_append(sessionId*, eventId*, idempotencyKey*, provider*, eventType*, eventTime*, payload*, rawPayload*)`
 - `session_end(sessionId*, summary, metadata)`

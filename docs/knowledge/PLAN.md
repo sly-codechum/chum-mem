@@ -8,7 +8,7 @@
 ## Current Architecture Assessment
 
 ### Purpose
-chum-memory-project is a **cloud-native persistent memory platform for coding agents**. It provides a normalized MCP server that ingests session activity from Claude, Codex, and Gemini clients, stores raw and derived memory in PostgreSQL (with pgvector), and returns provenance-aware context packs for future sessions.
+chum-memory-project is a **cloud-native persistent memory platform for coding agents**. It provides a normalized MCP server that ingests session activity from Claude, Codex, Gemini, and other AI clients, stores raw and derived memory in PostgreSQL (with pgvector), and returns provenance-aware context packs for future sessions.
 
 ### Core Modules
 

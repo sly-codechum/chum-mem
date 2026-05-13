@@ -1,6 +1,12 @@
 import { z } from 'zod';
 
-export const providerSchema = z.enum(['claude', 'codex', 'gemini']);
+export const providerSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(64)
+  .regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/)
+  .transform((value) => value.toLowerCase());
 export type Provider = z.infer<typeof providerSchema>;
 
 export const actorTypeSchema = z.enum(['user', 'token', 'system']);

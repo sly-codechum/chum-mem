@@ -23,7 +23,6 @@ export const contextBuildRequestSchema = z.object({
   retrievalIntent: retrievalIntentSchema.optional(),
   includeHistorical: z.boolean().optional(),
   projectId: z.string().uuid().optional(),
-  repoUrl: z.string().url().optional(),
   branch: z.string().min(1).optional(),
   filePaths: z.array(z.string().min(1)).default([]),
   maxTokenBudget: z.number().int().positive().max(64000)

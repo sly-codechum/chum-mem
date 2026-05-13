@@ -20,7 +20,6 @@ interface SessionListItem {
   id: string;
   provider: string;
   externalSessionId: string;
-  repoUrl: string | null;
   branch: string | null;
   status: string;
   startedAt: string | null;

@@ -7,8 +7,8 @@
 # state in .chum-cache/session-<provider>-<session-id>.json so events can
 # reference the chum-mem session UUID for the whole lifetime of the shell.
 #
-# Provider is chosen by CHUM_PROVIDER (default "claude"). Valid values are
-# "claude", "codex", "gemini" — matches the Provider enum in the Rust API.
+# Provider is chosen by CHUM_PROVIDER (default "claude"). It is an open AI
+# client identifier, for example "claude", "codex", "gemini", or "cursor".
 #
 # Errors are surfaced to stderr with exit 1 (non-blocking) when the API is
 # unreachable — the user sees the error but their prompt still proceeds.
@@ -23,7 +23,7 @@ if [[ -z "$PROJECT_ID" ]]; then
   echo "session-sync: CHUM_MEM_PROJECT_ID not set, skipping session ingestion" >&2
   exit 0
 fi
-PROVIDER="${CHUM_PROVIDER:-claude}"
+PROVIDER="$(printf '%s' "${CHUM_PROVIDER:-claude}" | tr '[:upper:]' '[:lower:]')"
 
 mkdir -p "$CACHE_DIR"
 
@@ -52,32 +52,14 @@ ensure_session_started() {
     return 0
   fi
 
-  local repo_url branch commit_sha hostname_val os_val
-  repo_url=$(git -C "$PROJECT_ROOT" config --get remote.origin.url 2>/dev/null || echo "")
-  branch=$(git -C "$PROJECT_ROOT" branch --show-current 2>/dev/null || echo "")
-  commit_sha=$(git -C "$PROJECT_ROOT" rev-parse HEAD 2>/dev/null || echo "")
+  local hostname_val os_val
   hostname_val=$(hostname 2>/dev/null || echo "")
   os_val=$(uname -s 2>/dev/null || echo "")
-
-  # Convert SSH-style git URL to https:// so the API's URL validator accepts it.
-  # git@github.com:user/repo.git → https://github.com/user/repo.git
-  # git@host-alias:user/repo.git → https://host-alias/user/repo.git
-  if [[ "$repo_url" =~ ^git@([^:]+):(.+)$ ]]; then
-    repo_url="https://${BASH_REMATCH[1]}/${BASH_REMATCH[2]}"
-  fi
-  # Drop anything that still doesn't look like an http(s):// URL — the API
-  # rejects non-URL values via schema validation.
-  if [[ ! "$repo_url" =~ ^https?:// ]]; then
-    repo_url=""
-  fi
 
   local payload
   payload=$(jq -n \
     --arg projectId "$PROJECT_ID" \
     --arg externalSessionId "$AGENT_SESSION_ID" \
-    --arg repoUrl "$repo_url" \
-    --arg branch "$branch" \
-    --arg commitSha "$commit_sha" \
     --arg hostname "$hostname_val" \
     --arg os "$os_val" \
     --arg provider "$PROVIDER" \
@@ -86,11 +68,6 @@ ensure_session_started() {
       projectId: $projectId,
       externalSessionId: $externalSessionId
     }
-    + (
-      ({repoUrl: $repoUrl, branch: $branch, commitSha: $commitSha}
-        | with_entries(select(.value != "" and .value != null))) as $r
-      | if ($r | length) > 0 then {repo: $r} else {} end
-    )
     + (
       ({hostname: $hostname, os: $os}
         | with_entries(select(.value != "" and .value != null))) as $l

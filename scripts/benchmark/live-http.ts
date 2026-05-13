@@ -997,7 +997,6 @@ async function runContextBuildQuality(sessionId: string): Promise<ContextBuildCa
         provider: 'codex',
         objective: testCase.objective,
         maxTokenBudget: 1200,
-        repoUrl: 'file:///Workspace/chum-memory',
         branch: gitBranch ?? 'v2.1'
       }
     );

@@ -282,7 +282,7 @@ Schema work:
 - add supporting btree indexes for frequent filters:
   - `embeddings(project_id, model, memory_id)`
   - `memories(project_id, created_at desc)`
-  - `sessions(id, provider, repo_url, branch)` or equivalent filter support
+  - `sessions(id, provider, project_id, branch)` or equivalent filter support
 
 Query redesign:
 

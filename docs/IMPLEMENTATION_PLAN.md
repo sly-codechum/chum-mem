@@ -2,7 +2,7 @@
 
 ## 1. Architecture summary
 
-`chum-mem` is a cloud-native, multi-tenant memory platform for coding agents. Claude, Codex, and Gemini clients send provider-native activity through a normalized adapter layer into one trusted MCP server surface. The server resolves actor, organization, team, and optional project scope on the server, persists canonical session data plus raw provider payloads in PostgreSQL, and emits audit records for sensitive operations.
+`chum-mem` is a cloud-native, multi-tenant memory platform for coding agents. AI clients such as Claude, Codex, Gemini, and Cursor send provider-native activity through a normalized adapter layer into one trusted MCP server surface. The server resolves actor, organization, team, and optional project scope on the server, persists canonical session data plus raw provider payloads in PostgreSQL, and emits audit records for sensitive operations.
 
 Raw session events are durable first-class records. Background workers should compact those events into session episodes, then extract structured memories, attach provenance back to source events, compute embeddings, and link related memories and sessions. Retrieval should combine PostgreSQL full-text search, pgvector similarity search, and bounded graph expansion, then apply session-aware reranking before building compact context packs for future sessions.
 

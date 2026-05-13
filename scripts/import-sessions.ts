@@ -6,7 +6,7 @@ import { homedir } from 'node:os';
 import { basename, extname, join, resolve } from 'node:path';
 import readline from 'node:readline';
 
-type Provider = 'codex' | 'claude' | 'gemini';
+type Provider = string;
 type CanonicalEventType =
   | 'prompt'
   | 'response'
@@ -44,7 +44,6 @@ interface SessionStartPayload {
   projectId: string;
   externalSessionId: string;
   repo: {
-    repoUrl?: string;
     repoName?: string;
     branch?: string;
     commitSha?: string;
@@ -228,6 +227,13 @@ function inferProvider(filePath: string, sessionMeta: Record<string, unknown> | 
   const modelProvider = String(payload.model_provider ?? '').toLowerCase();
   const model = String(payload.model ?? '').toLowerCase();
   const joined = `${lowerPath} ${originator} ${source} ${modelProvider} ${model}`;
+  const explicitProvider =
+    normalizeProviderId(modelProvider) ??
+    normalizeProviderId(source) ??
+    normalizeProviderId(originator);
+  if (explicitProvider) {
+    return explicitProvider;
+  }
 
   if (joined.includes('claude')) {
     return 'claude';
@@ -236,6 +242,17 @@ function inferProvider(filePath: string, sessionMeta: Record<string, unknown> | 
     return 'gemini';
   }
   return 'codex';
+}
+
+function normalizeProviderId(value: string): Provider | undefined {
+  const normalized = value.trim().toLowerCase();
+  if (['user', 'human', 'assistant', 'system', 'unknown'].includes(normalized)) {
+    return undefined;
+  }
+  if (/^[a-z0-9][a-z0-9._-]{0,63}$/.test(normalized)) {
+    return normalized;
+  }
+  return undefined;
 }
 
 function extractSessionFileTimestamp(filePath: string): Date | undefined {
@@ -621,7 +638,6 @@ async function parseSessionFile(filePath: string, options: ImportOptions): Promi
         const provider = inferProvider(filePath, sessionMeta);
         const externalSessionId = String((sessionMeta.id ?? '') || stableId(filePath));
         const repo = {
-          repoUrl: stringOrUndefined(sessionMeta.repository_url) ?? stringOrUndefined(sessionMeta.repo_url),
           repoName: undefined,
           branch: stringOrUndefined(sessionMeta.branch),
           commitSha: stringOrUndefined(sessionMeta.commit_hash),

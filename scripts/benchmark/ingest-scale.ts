@@ -372,9 +372,8 @@ async function runOneSession(
         projectId: opts.projectId,
         externalSessionId: sessionExternalId,
         repo: {
-          repoUrl: 'https://example.com/ingest-scale.git',
           branch: 'main',
-          commit: 'deadbeef',
+          commitSha: 'deadbeef',
         },
         local: {
           userAgent: 'ingest-scale-harness/0.1',

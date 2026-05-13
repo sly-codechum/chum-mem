@@ -251,7 +251,6 @@ dependencies = [
  "serde_json",
  "thiserror",
  "time",
- "url",
  "uuid",
 ]
 

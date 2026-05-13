@@ -10,13 +10,13 @@ import {
 } from './index.js';
 
 describe('shared contracts', () => {
-  it('accepts a normalized session start request', () => {
+  it('accepts a normalized session start request from any AI client', () => {
     const parsed = startSessionRequestSchema.parse({
-      provider: 'codex',
+      provider: 'Cursor',
       projectId: randomUUID(),
       externalSessionId: 'sess_123',
       repo: {
-        repoUrl: 'https://github.com/example/repo',
+        repoName: 'example-repo',
         branch: 'main',
         filePaths: ['apps/api/src/index.ts']
       },
@@ -25,7 +25,7 @@ describe('shared contracts', () => {
       }
     });
 
-    expect(parsed.provider).toBe('codex');
+    expect(parsed.provider).toBe('cursor');
     expect(parsed.repo.filePaths).toContain('apps/api/src/index.ts');
   });
 
@@ -68,12 +68,12 @@ describe('shared contracts', () => {
     const parsed = memorySearchRequestSchema.parse({
       query: 'continue prior debugging session',
       sessionId: randomUUID(),
-      repoUrl: 'https://github.com/example/repo',
+      projectId: randomUUID(),
       branch: 'main'
     });
 
     expect(parsed.sessionId).toBeDefined();
-    expect(parsed.repoUrl).toContain('github.com/example/repo');
+    expect(parsed.projectId).toBeDefined();
   });
 
   it('accepts search hits with matched session ids', () => {

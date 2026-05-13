@@ -23,7 +23,6 @@ export const projectSchema = z.object({
   teamId: z.string().uuid(),
   name: z.string().min(1),
   slug: z.string().min(1),
-  repoUrl: z.string().url().nullable(),
   defaultBranch: z.string().nullable(),
   createdAt: timestampSchema
 });

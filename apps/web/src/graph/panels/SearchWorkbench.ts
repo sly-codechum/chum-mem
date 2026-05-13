@@ -106,7 +106,7 @@ export class SearchWorkbench extends Panel {
   private tokenSlider!: HTMLInputElement;
   private tokenDisplay!: HTMLElement;
   private objectiveTextarea!: HTMLTextAreaElement;
-  private providerSelect!: HTMLSelectElement;
+  private providerInput!: HTMLInputElement;
   private buildContextBtn!: HTMLButtonElement;
   private ctxResultContainer!: HTMLElement;
 
@@ -449,18 +449,23 @@ export class SearchWorkbench extends Panel {
     }) as HTMLTextAreaElement;
     this.ctxBuilderBody.appendChild(this.objectiveTextarea);
 
-    // Provider dropdown
+    // Provider input
     const providerLabel = el('label');
     providerLabel.textContent = 'Provider';
     this.ctxBuilderBody.appendChild(providerLabel);
 
-    this.providerSelect = el('select') as HTMLSelectElement;
-    for (const opt of ['claude-code', 'openai', 'gemini']) {
-      const option = el('option', { value: opt });
-      option.textContent = opt;
-      this.providerSelect.appendChild(option);
+    this.providerInput = el('input', {
+      type: 'text',
+      value: 'codex',
+      list: 'provider-suggestions',
+      autocomplete: 'off',
+    }) as HTMLInputElement;
+    const providerSuggestions = el('datalist', { id: 'provider-suggestions' });
+    for (const opt of ['codex', 'claude', 'gemini', 'cursor']) {
+      providerSuggestions.appendChild(el('option', { value: opt }));
     }
-    this.ctxBuilderBody.appendChild(this.providerSelect);
+    this.ctxBuilderBody.appendChild(this.providerInput);
+    this.ctxBuilderBody.appendChild(providerSuggestions);
 
     // Build context button
     this.buildContextBtn = el('button', { type: 'button' }, 'ctx-build-btn') as HTMLButtonElement;
@@ -489,7 +494,7 @@ export class SearchWorkbench extends Panel {
     this.ctxResultContainer.innerHTML = '<div class="state-loading">Building context...</div>';
 
     const params = {
-      provider: this.providerSelect.value,
+      provider: this.providerInput.value.trim(),
       objective: this.objectiveTextarea.value.trim(),
       maxTokenBudget: Number(this.tokenSlider.value),
     };
