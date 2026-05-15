@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import type { Sql } from 'postgres';
-import { migrationFiles } from './client.js';
+import { migrationFiles, nonTransactionalMigrationFiles } from './client.js';
 
 const MIGRATION_LOCK_KEY = 42424201;
 const migrationSentinels: Record<string, string> = {
@@ -10,7 +10,10 @@ const migrationSentinels: Record<string, string> = {
   '0002_episode_and_session_graph.sql': 'public.session_episodes',
   '0003_session_edges.sql': 'public.session_edges',
   '0004_queue_and_replay.sql': 'public.worker_jobs',
-  '0005_knowledge_graph.sql': 'public.knowledge_communities'
+  '0005_knowledge_graph.sql': 'public.knowledge_communities',
+  '0008_latency_online_path.sql': 'public.knowledge_snapshot_heads',
+  '0011_typed_claims.sql': 'public.claims',
+  '0020_claim_governance.sql': 'public.claim_governance_history'
 };
 
 function migrationsDirectory(): string {
@@ -64,14 +67,22 @@ export async function applyMigrations(sql: Sql): Promise<{ applied: string[]; sk
         continue;
       }
 
-      await sql.begin(async (tx) => {
-        const scopedTx = tx as unknown as Sql;
-        await scopedTx.unsafe(contents);
-        await scopedTx`
+      if (nonTransactionalMigrationFiles.has(fileName)) {
+        await sql.unsafe(contents);
+        await sql`
           insert into public.schema_migrations (name, checksum)
           values (${fileName}, ${nextChecksum})
         `;
-      });
+      } else {
+        await sql.begin(async (tx) => {
+          const scopedTx = tx as unknown as Sql;
+          await scopedTx.unsafe(contents);
+          await scopedTx`
+            insert into public.schema_migrations (name, checksum)
+            values (${fileName}, ${nextChecksum})
+          `;
+        });
+      }
 
       applied.push(fileName);
     }

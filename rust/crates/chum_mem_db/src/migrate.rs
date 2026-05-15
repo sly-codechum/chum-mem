@@ -5,7 +5,7 @@ use sqlx::PgPool;
 use thiserror::Error;
 
 const MIGRATION_LOCK_KEY: i64 = 42_424_201;
-pub const EXPECTED_MIGRATION_HEAD: &str = "0019_community_hierarchy.sql";
+pub const EXPECTED_MIGRATION_HEAD: &str = "0022_open_provider_identity.sql";
 
 #[derive(Debug, Clone, Copy)]
 pub struct MigrationFile {
@@ -135,6 +135,26 @@ pub const MIGRATION_FILES: &[MigrationFile] = &[
     MigrationFile {
         name: "0019_community_hierarchy.sql",
         contents: include_str!("../../../../infra/migrations/0019_community_hierarchy.sql"),
+        sentinel: None,
+        transactional: true,
+    },
+    MigrationFile {
+        name: "0020_claim_governance.sql",
+        contents: include_str!("../../../../infra/migrations/0020_claim_governance.sql"),
+        sentinel: Some("public.claim_governance_history"),
+        transactional: true,
+    },
+    MigrationFile {
+        name: "0021_project_id_repository_identity.sql",
+        contents: include_str!(
+            "../../../../infra/migrations/0021_project_id_repository_identity.sql"
+        ),
+        sentinel: None,
+        transactional: true,
+    },
+    MigrationFile {
+        name: "0022_open_provider_identity.sql",
+        contents: include_str!("../../../../infra/migrations/0022_open_provider_identity.sql"),
         sentinel: None,
         transactional: true,
     },
@@ -341,5 +361,30 @@ mod tests {
             MIGRATION_FILES.last().map(|file| file.name),
             Some(EXPECTED_MIGRATION_HEAD)
         );
+    }
+
+    #[test]
+    fn migration_registry_matches_infra_migrations() {
+        let migrations_dir =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../infra/migrations");
+        let mut disk_migrations = std::fs::read_dir(migrations_dir)
+            .expect("read migrations directory")
+            .map(|entry| {
+                entry
+                    .expect("read migration entry")
+                    .file_name()
+                    .into_string()
+                    .expect("migration file name is utf-8")
+            })
+            .filter(|name| name.ends_with(".sql"))
+            .collect::<Vec<_>>();
+        disk_migrations.sort();
+
+        let registry_migrations = MIGRATION_FILES
+            .iter()
+            .map(|file| file.name.to_string())
+            .collect::<Vec<_>>();
+
+        assert_eq!(registry_migrations, disk_migrations);
     }
 }
