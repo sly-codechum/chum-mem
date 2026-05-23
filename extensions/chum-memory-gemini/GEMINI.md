@@ -7,7 +7,7 @@ This extension gives you MCP tools for persistent memory and a knowledge graph. 
 When the user mentions memory, recall, search, session, ingestion, knowledge graph, or uses `/chum-memory`:
 
 1. **Always call MCP tools directly.** Do not summarize what you could do — execute the tool call.
-2. Start with `knowledge_report(layer:"repository")` so the session reads the repository knowledge graph report before raw retrieval.
+2. Start with `knowledge_report(layer:"unified")` so the session reads the compact repository digest, session communities, and cross-layer summary before raw retrieval.
 3. Use a repository-layer `knowledge_query` to build structural awareness of relevant components, architecture, and relationships. Use `knowledge_communities` after that when cluster structure matters.
 4. Then call `mem_search` (mode=hybrid, disclosureLevel=overview, limit=5).
    Include `sessionId` when continuing the same workstream.

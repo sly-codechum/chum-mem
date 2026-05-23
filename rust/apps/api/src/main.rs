@@ -44,12 +44,12 @@ use chum_mem_db::{
 };
 use chum_mem_pipeline::{
     CHROMA_EMBEDDING_DIMENSIONS, ChromaQueryResult, GraphProjection, GraphQueryResponse,
-    KnowledgeGraph, MemorySearchEnvelope, RankedMemory, RankingContext, RepositoryFilePayload,
-    SearchMetrics, SessionEventRecord, build_context_pack, build_session_completion_job_plan,
-    community_relevance_from_query, compile_minimal_proof_set, derive_memories_from_session,
-    derive_session_episodes, embed_text, event_text, generate_knowledge_report,
-    memory_community_map, merge_graphs, merge_hybrid_results, progressive_disclosure,
-    query_chroma_memories_typed, rank_hybrid_results, run_knowledge_query,
+    KnowledgeGraph, KnowledgeNode, MemorySearchEnvelope, RankedMemory, RankingContext,
+    RepositoryFilePayload, SearchMetrics, SessionEventRecord, build_context_pack,
+    build_session_completion_job_plan, community_relevance_from_query, compile_minimal_proof_set,
+    derive_memories_from_session, derive_session_episodes, embed_text, event_text,
+    generate_knowledge_report, memory_community_map, merge_graphs, merge_hybrid_results,
+    progressive_disclosure, query_chroma_memories_typed, rank_hybrid_results, run_knowledge_query,
     score_session_relationship, to_node_link_json,
 };
 use reqwest::Client;
@@ -93,6 +93,9 @@ const API_ROUTES: &[&str] = &[
 const SEARCH_PROVENANCE_LIMIT_DEFAULT: i64 = 2;
 const CONTEXT_BUILD_SEARCH_LIMIT: u32 = 12;
 const GLOBAL_PROJECT_SLUG: &str = "global";
+const UNIFIED_REPORT_COMMUNITY_LIMIT: usize = 8;
+const UNIFIED_REPORT_NODE_REF_LIMIT: usize = 4;
+const UNIFIED_REPORT_HUB_LIMIT: usize = 8;
 
 /// Cached community data extracted from the session knowledge graph.
 /// Scoped by project_id to prevent cross-project contamination.
@@ -546,7 +549,7 @@ fn mcp_tool_definitions() -> Vec<Value> {
         json!({"name":"context_compile_v2","description":"Compile the smallest proof set whose claims cover the objective's sub-goals. v2.2.1 replacement for context_build: hard-ceiling token budget, surfaces uncovered sub-goals as proof_gap markers in unknowns instead of silently truncating. See docs/research/v2.2.1-pckc/DESIGN.md §4.","inputSchema":{"type":"object","properties":{"provider":{"type":"string","minLength":1,"maxLength":64,"description":"Open AI client identifier for the requesting client."},"objective":{"type":"string"},"retrievalIntent":{"type":"string","enum":["none","memory_only","repository_only","session_graph_only","hybrid"]},"projectId":{"type":"string","format":"uuid"},"branch":{"type":"string"},"filePaths":{"type":"array","items":{"type":"string"}},"includeHistorical":{"type":"boolean"},"maxTokenBudget":{"type":"integer","minimum":1,"maximum":64000}},"required":["provider","objective","maxTokenBudget"]}}),
         json!({"name":"graph_snapshot","description":"Return a knowledge graph snapshot of memory relationships","inputSchema":{"type":"object","properties":{}}}),
         json!({"name":"knowledge_graph_export","description":"Export the latest knowledge graph as machine-readable JSON","inputSchema":{"type":"object","properties":{"projectId":{"type":"string","format":"uuid"},"layer":{"type":"string","enum":["repository","session"],"description":"Graph layer: repository (code structure) or session (interaction history). Omit for latest of any type."}}}}),
-        json!({"name":"knowledge_report","description":"Generate a human-readable knowledge report from the latest graph snapshot","inputSchema":{"type":"object","properties":{"projectId":{"type":"string","format":"uuid"},"layer":{"type":"string","enum":["repository","session"],"description":"Graph layer: repository (code structure) or session (interaction history). Omit for latest of any type."}}}}),
+        json!({"name":"knowledge_report","description":"Generate a human-readable knowledge report from the latest graph snapshot","inputSchema":{"type":"object","properties":{"projectId":{"type":"string","format":"uuid"},"layer":{"type":"string","enum":["repository","session","unified"],"description":"Graph layer: repository (code structure), session (interaction history), or unified for a compact cross-layer report. Omit for latest of any type."}}}}),
         json!({"name":"knowledge_query","description":"Query hub nodes, shortest paths, neighbors, communities, search the graph, or run NeuroPath goal-directed path pruning","inputSchema":{"type":"object","properties":{"projectId":{"type":"string","format":"uuid"},"query":{"type":"string","enum":["hub_nodes","shortest_path","neighbors","communities","search","goal_directed"]},"nodeId":{"type":"string"},"targetNodeId":{"type":"string"},"text":{"type":"string"},"depth":{"type":"integer","minimum":1,"maximum":5},"layer":{"type":"string","enum":["repository","session"],"description":"Graph layer: repository (code structure) or session (interaction history). Omit for latest of any type."}},"required":["query"]}}),
         json!({"name":"knowledge_communities","description":"List detected graph communities and cohesion scores","inputSchema":{"type":"object","properties":{"projectId":{"type":"string","format":"uuid"},"layer":{"type":"string","enum":["repository","session"],"description":"Graph layer to query."}}}}),
         json!({"name":"memory_get_batch","description":"Fetch multiple memory records by ID after mem_search filtering","inputSchema":{"type":"object","properties":{"ids":{"type":"array","items":{"type":"string","format":"uuid"},"minItems":1,"maxItems":20}},"required":["ids"]}}),
@@ -2286,33 +2289,35 @@ async fn perform_knowledge_report(
     let context = scoped_context(&state.scope, Some(resolved_pid))?;
     let mut tx = begin_tx(state, &context).await?;
 
-    // v2.2.2: Support unified layer that merges repository + session reports
+    // v2.2.3: Support a compact unified report that keeps repository graph
+    // truth primary and adds bounded session-layer continuity signals.
     if layer == Some("unified") {
         let repo_graph =
             load_latest_knowledge_graph_by_type(&mut tx, &context, Some("repository")).await?;
-        let session_graph =
+        let mut session_graph =
             load_latest_knowledge_graph_by_type(&mut tx, &context, Some("session")).await?;
-        commit_tx(tx).await?;
 
-        let repo_report = repo_graph
-            .as_ref()
-            .map(|g| generate_knowledge_report(g))
-            .unwrap_or_default();
-        let session_report = session_graph
-            .as_ref()
-            .map(|g| generate_knowledge_report(g))
-            .unwrap_or_default();
+        // Session layer snapshots may live in the global project when a local
+        // repository-scoped run has not produced a session graph yet.
+        if session_graph.is_none() {
+            if let Some(global_pid) = resolve_global_project_id(&mut tx, &state.scope).await {
+                if global_pid != resolved_pid {
+                    let global_ctx = scoped_context(&state.scope, Some(global_pid))?;
+                    session_graph =
+                        load_latest_knowledge_graph_by_type(&mut tx, &global_ctx, Some("session"))
+                            .await?;
+                }
+            }
+        }
+        commit_tx(tx).await?;
 
         // Build unified cross-layer summary
         let cross_layer =
             build_unified_cross_layer_summary(repo_graph.as_ref(), session_graph.as_ref());
-
-        let unified_markdown = format!(
-            "# Unified Knowledge Report\n\n\
-             ## Repository Layer\n\n{}\n\n\
-             ## Session Layer\n\n{}\n\n\
-             ## Cross-Layer Summary\n\n{}",
-            repo_report, session_report, cross_layer
+        let unified_markdown = build_compact_unified_knowledge_report(
+            repo_graph.as_ref(),
+            session_graph.as_ref(),
+            &cross_layer,
         );
         let generated_at = repo_graph
             .as_ref()
@@ -2357,7 +2362,311 @@ async fn perform_knowledge_report(
     })
 }
 
-/// v2.2.2: Build a cross-layer summary from repository + session graphs.
+fn build_compact_unified_knowledge_report(
+    repo_graph: Option<&KnowledgeGraph>,
+    session_graph: Option<&KnowledgeGraph>,
+    cross_layer: &str,
+) -> String {
+    format!(
+        "# Unified Knowledge Report\n\n\
+         This compact report keeps repository graph truth separate from session continuity signals.\n\n\
+         ## Repository Layer\n\n{}\n\n\
+         ## Session Layer Communities\n\n{}\n\n\
+         ## Cross-Layer Summary\n\n{}",
+        build_compact_graph_layer_report("Repository", repo_graph),
+        build_compact_session_community_report(session_graph),
+        cross_layer
+    )
+}
+
+fn build_compact_graph_layer_report(layer_name: &str, graph: Option<&KnowledgeGraph>) -> String {
+    let Some(graph) = graph else {
+        return format!("_No {} graph snapshot found._", layer_name.to_lowercase());
+    };
+
+    let mut lines = Vec::new();
+    lines.extend(compact_graph_summary_lines(graph));
+
+    let hubs = compact_hub_lines(graph, UNIFIED_REPORT_HUB_LIMIT);
+    if !hubs.is_empty() {
+        lines.push(String::new());
+        lines.push("### Top Hubs".to_string());
+        lines.extend(hubs);
+    }
+
+    let communities = compact_community_lines(graph, UNIFIED_REPORT_COMMUNITY_LIMIT);
+    if !communities.is_empty() {
+        lines.push(String::new());
+        lines.push("### Top Communities".to_string());
+        lines.extend(communities);
+    }
+
+    lines.join("\n")
+}
+
+fn build_compact_session_community_report(session_graph: Option<&KnowledgeGraph>) -> String {
+    let Some(graph) = session_graph else {
+        return "_No session-layer graph snapshot found._".to_string();
+    };
+
+    let mut lines = compact_graph_summary_lines(graph);
+    let level0_total = graph.communities.iter().filter(|c| c.level == 0).count();
+    let level0_singletons = graph
+        .communities
+        .iter()
+        .filter(|c| c.level == 0 && c.node_count <= 1)
+        .count();
+    let level1_total = graph.communities.iter().filter(|c| c.level > 0).count();
+    lines.push(format!(
+        "- Community hierarchy: {} top-level, {} sub-communities, {} singleton top-level",
+        level0_total, level1_total, level0_singletons
+    ));
+
+    let communities = compact_community_lines(graph, UNIFIED_REPORT_COMMUNITY_LIMIT);
+    if communities.is_empty() {
+        lines.push(String::new());
+        lines.push("_No non-singleton session communities detected._".to_string());
+    } else {
+        lines.push(String::new());
+        lines.push("### Top Session Communities".to_string());
+        lines.extend(communities);
+    }
+
+    lines.join("\n")
+}
+
+fn compact_graph_summary_lines(graph: &KnowledgeGraph) -> Vec<String> {
+    let ed = &graph.statistics.evidence_distribution;
+    let mut node_type_counts: HashMap<&str, usize> = HashMap::new();
+    for node in &graph.nodes {
+        *node_type_counts.entry(node.node_type.as_str()).or_default() += 1;
+    }
+    let mut relation_counts: HashMap<&str, usize> = HashMap::new();
+    for edge in &graph.edges {
+        *relation_counts.entry(edge.relation.as_str()).or_default() += 1;
+    }
+
+    vec![
+        format!(
+            "- Snapshot: `{}`; {} nodes, {} edges, {} communities",
+            report_date(&graph.generated_at),
+            graph.statistics.node_count,
+            graph.statistics.edge_count,
+            graph.statistics.community_count
+        ),
+        format!(
+            "- Evidence: {} extracted, {} inferred, {} ambiguous",
+            ed.extracted, ed.inferred, ed.ambiguous
+        ),
+        format!(
+            "- Top node types: {}",
+            format_count_entries(node_type_counts.into_iter().collect(), 6)
+        ),
+        format!(
+            "- Top edge relations: {}",
+            format_count_entries(relation_counts.into_iter().collect(), 6)
+        ),
+    ]
+}
+
+fn compact_hub_lines(graph: &KnowledgeGraph, limit: usize) -> Vec<String> {
+    let mut degree: HashMap<&str, usize> = HashMap::new();
+    for edge in &graph.edges {
+        *degree.entry(edge.source.as_str()).or_default() += 1;
+        *degree.entry(edge.target.as_str()).or_default() += 1;
+    }
+
+    let mut hubs: Vec<_> = graph
+        .nodes
+        .iter()
+        .map(|node| (node, *degree.get(node.id.as_str()).unwrap_or(&0)))
+        .filter(|(_, degree)| *degree > 1)
+        .collect();
+    hubs.sort_by(|a, b| {
+        b.1.cmp(&a.1)
+            .then_with(|| a.0.node_type.cmp(&b.0.node_type))
+            .then_with(|| a.0.label.cmp(&b.0.label))
+    });
+
+    hubs.into_iter()
+        .take(limit)
+        .map(|(node, degree)| {
+            format!(
+                "- `{}` ({}; degree {})",
+                report_inline_code(&compact_node_label(node)),
+                node.node_type,
+                degree
+            )
+        })
+        .collect()
+}
+
+fn compact_community_lines(graph: &KnowledgeGraph, limit: usize) -> Vec<String> {
+    let node_map: HashMap<&str, &KnowledgeNode> = graph
+        .nodes
+        .iter()
+        .map(|node| (node.id.as_str(), node))
+        .collect();
+    let mut communities: Vec<_> = graph
+        .communities
+        .iter()
+        .filter(|community| community.level == 0 && community.node_count > 1)
+        .collect();
+    communities.sort_by(|a, b| {
+        b.node_count
+            .cmp(&a.node_count)
+            .then_with(|| b.cohesion_score.total_cmp(&a.cohesion_score))
+            .then_with(|| a.community_id.cmp(&b.community_id))
+    });
+
+    let total = communities.len();
+    let mut lines = Vec::new();
+    for community in communities.into_iter().take(limit) {
+        let label = community
+            .label
+            .as_deref()
+            .map(|value| truncate_report_text(value, 96))
+            .unwrap_or_else(|| format!("Community {}", community.community_id));
+        let path = community
+            .community_path
+            .as_deref()
+            .map(|value| format!("; path {}", value))
+            .unwrap_or_default();
+        lines.push(format!(
+            "- **{}**: id {}; {} nodes; cohesion {:.2}{}",
+            label, community.community_id, community.node_count, community.cohesion_score, path
+        ));
+        lines.push(format!(
+            "  - Representatives: {}",
+            format_node_refs(
+                &community.representative_nodes,
+                &node_map,
+                UNIFIED_REPORT_NODE_REF_LIMIT
+            )
+        ));
+        if !community.bridge_nodes.is_empty() {
+            lines.push(format!(
+                "  - Bridges: {}",
+                format_node_refs(
+                    &community.bridge_nodes,
+                    &node_map,
+                    UNIFIED_REPORT_NODE_REF_LIMIT
+                )
+            ));
+        }
+    }
+
+    if total > limit {
+        lines.push(format!(
+            "_Omitted {} additional non-singleton top-level communities._",
+            total - limit
+        ));
+    }
+
+    lines
+}
+
+fn format_node_refs(
+    node_ids: &[String],
+    node_map: &HashMap<&str, &KnowledgeNode>,
+    limit: usize,
+) -> String {
+    if node_ids.is_empty() {
+        return "none".to_string();
+    }
+
+    let mut labels: Vec<String> = node_ids
+        .iter()
+        .take(limit)
+        .map(|node_id| {
+            node_map
+                .get(node_id.as_str())
+                .map(|node| compact_node_label(node))
+                .unwrap_or_else(|| truncate_report_text(node_id, 96))
+        })
+        .map(|label| format!("`{}`", report_inline_code(&label)))
+        .collect();
+    if node_ids.len() > limit {
+        labels.push(format!("+{} more", node_ids.len() - limit));
+    }
+    labels.join(", ")
+}
+
+fn compact_node_label(node: &KnowledgeNode) -> String {
+    let metadata_label = [
+        "title",
+        "summary",
+        "path",
+        "sourceFile",
+        "file",
+        "symbol",
+        "name",
+        "provider",
+        "eventType",
+    ]
+    .iter()
+    .find_map(|key| {
+        node.metadata
+            .get(*key)
+            .and_then(|value| value.as_str())
+            .filter(|value| !value.trim().is_empty())
+    });
+
+    let candidate = metadata_label.unwrap_or(node.label.as_str());
+    if looks_like_uuid_label(candidate) || candidate.starts_with("memory:") {
+        return format!("{} {}", node.node_type, short_node_id(&node.id));
+    }
+    truncate_report_text(candidate, 96)
+}
+
+fn format_count_entries(mut entries: Vec<(&str, usize)>, limit: usize) -> String {
+    if entries.is_empty() {
+        return "none".to_string();
+    }
+    entries.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(b.0)));
+    entries
+        .into_iter()
+        .take(limit)
+        .map(|(label, count)| format!("`{}` ({})", report_inline_code(label), count))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+fn report_date(generated_at: &str) -> &str {
+    generated_at.split('T').next().unwrap_or(generated_at)
+}
+
+fn report_inline_code(value: &str) -> String {
+    value.replace('`', "'")
+}
+
+fn truncate_report_text(value: &str, max_chars: usize) -> String {
+    let normalized = value.split_whitespace().collect::<Vec<_>>().join(" ");
+    if normalized.chars().count() <= max_chars {
+        return normalized;
+    }
+
+    let keep = max_chars.saturating_sub(3);
+    let mut output = normalized.chars().take(keep).collect::<String>();
+    output.push_str("...");
+    output
+}
+
+fn looks_like_uuid_label(value: &str) -> bool {
+    value.len() == 36 && Uuid::parse_str(value).is_ok()
+}
+
+fn short_node_id(value: &str) -> String {
+    value
+        .rsplit(':')
+        .next()
+        .unwrap_or(value)
+        .chars()
+        .take(8)
+        .collect()
+}
+
+/// v2.2.3: Build a cross-layer summary from repository + session graphs.
 fn build_unified_cross_layer_summary(
     repo_graph: Option<&KnowledgeGraph>,
     session_graph: Option<&KnowledgeGraph>,
@@ -4714,11 +5023,175 @@ mod tests {
         }
     }
 
+    fn report_test_graph() -> KnowledgeGraph {
+        let project_id = Uuid::parse_str("00000000-0000-0000-0000-000000000003").unwrap();
+        let nodes = vec![
+            KnowledgeNode {
+                id: "memory:decision".to_string(),
+                label: "memory:decision".to_string(),
+                node_type: "decision".to_string(),
+                source_type: "session".to_string(),
+                source_id: "session-a".to_string(),
+                metadata: json!({"title":"Decision to keep repository truth primary"}),
+                community_id: Some(1),
+            },
+            KnowledgeNode {
+                id: "memory:task".to_string(),
+                label: "memory:task".to_string(),
+                node_type: "task".to_string(),
+                source_type: "session".to_string(),
+                source_id: "session-a".to_string(),
+                metadata: json!({"summary":"Update SKILL.md files to start from unified reports"}),
+                community_id: Some(1),
+            },
+            KnowledgeNode {
+                id: "file:rust/apps/api/src/main.rs".to_string(),
+                label: "rust/apps/api/src/main.rs".to_string(),
+                node_type: "file".to_string(),
+                source_type: "repository".to_string(),
+                source_id: "repo".to_string(),
+                metadata: json!({"path":"rust/apps/api/src/main.rs"}),
+                community_id: Some(2),
+            },
+            KnowledgeNode {
+                id: "symbol:knowledge_report".to_string(),
+                label: "knowledge_report".to_string(),
+                node_type: "symbol".to_string(),
+                source_type: "repository".to_string(),
+                source_id: "repo".to_string(),
+                metadata: json!({"sourceFile":"rust/apps/api/src/main.rs"}),
+                community_id: Some(2),
+            },
+            KnowledgeNode {
+                id: "memory:low".to_string(),
+                label: "Low priority singleton".to_string(),
+                node_type: "memory".to_string(),
+                source_type: "session".to_string(),
+                source_id: "session-b".to_string(),
+                metadata: json!({}),
+                community_id: Some(3),
+            },
+        ];
+        let edges = vec![
+            chum_mem_pipeline::KnowledgeEdge {
+                source: "memory:decision".to_string(),
+                target: "memory:task".to_string(),
+                relation: "supports".to_string(),
+                evidence: "extracted".to_string(),
+                weight: 1.0,
+                source_file: None,
+                metadata: json!({}),
+            },
+            chum_mem_pipeline::KnowledgeEdge {
+                source: "file:rust/apps/api/src/main.rs".to_string(),
+                target: "symbol:knowledge_report".to_string(),
+                relation: "contains".to_string(),
+                evidence: "extracted".to_string(),
+                weight: 1.0,
+                source_file: Some("rust/apps/api/src/main.rs".to_string()),
+                metadata: json!({}),
+            },
+        ];
+        KnowledgeGraph {
+            version: "1.0.0".to_string(),
+            generated_at: "2026-05-23T00:00:00Z".to_string(),
+            project_id,
+            nodes,
+            edges,
+            communities: vec![
+                chum_mem_pipeline::CommunityInfo {
+                    community_id: 1,
+                    label: Some("Session continuity and default report policy".to_string()),
+                    node_count: 2,
+                    cohesion_score: 0.91,
+                    representative_nodes: vec![
+                        "memory:decision".to_string(),
+                        "memory:task".to_string(),
+                    ],
+                    bridge_nodes: Vec::new(),
+                    community_path: Some("1".to_string()),
+                    level: 0,
+                },
+                chum_mem_pipeline::CommunityInfo {
+                    community_id: 2,
+                    label: Some("Knowledge report runtime".to_string()),
+                    node_count: 2,
+                    cohesion_score: 0.84,
+                    representative_nodes: vec![
+                        "file:rust/apps/api/src/main.rs".to_string(),
+                        "symbol:knowledge_report".to_string(),
+                    ],
+                    bridge_nodes: Vec::new(),
+                    community_path: Some("2".to_string()),
+                    level: 0,
+                },
+                chum_mem_pipeline::CommunityInfo {
+                    community_id: 3,
+                    label: Some("Low priority singleton".to_string()),
+                    node_count: 1,
+                    cohesion_score: 0.1,
+                    representative_nodes: vec!["memory:low".to_string()],
+                    bridge_nodes: Vec::new(),
+                    community_path: Some("3".to_string()),
+                    level: 0,
+                },
+                chum_mem_pipeline::CommunityInfo {
+                    community_id: 4,
+                    label: Some("Nested session detail".to_string()),
+                    node_count: 2,
+                    cohesion_score: 0.77,
+                    representative_nodes: vec!["memory:decision".to_string()],
+                    bridge_nodes: Vec::new(),
+                    community_path: Some("1.4".to_string()),
+                    level: 1,
+                },
+            ],
+            statistics: chum_mem_pipeline::GraphStatistics {
+                node_count: 5,
+                edge_count: 2,
+                community_count: 4,
+                evidence_distribution: chum_mem_pipeline::EvidenceDistribution {
+                    extracted: 2,
+                    inferred: 0,
+                    ambiguous: 0,
+                },
+                avg_degree: 0.8,
+                density: 0.2,
+                isolated_nodes: 1,
+            },
+        }
+    }
+
     #[test]
     fn provider_id_accepts_non_bundled_clients() {
         assert_eq!(normalize_provider_id("Cursor").unwrap(), "cursor");
         assert_eq!(normalize_provider_id("aider_2").unwrap(), "aider_2");
         assert!(normalize_provider_id("claude code").is_err());
+    }
+
+    #[test]
+    fn compact_session_report_includes_bounded_session_communities() {
+        let graph = report_test_graph();
+        let report = build_compact_session_community_report(Some(&graph));
+
+        assert!(report.contains("Top Session Communities"));
+        assert!(report.contains("Session continuity and default report policy"));
+        assert!(report.contains("Decision to keep repository truth primary"));
+        assert!(report.contains("3 top-level, 1 sub-communities, 1 singleton top-level"));
+        assert!(!report.contains("Nested session detail"));
+        assert!(!report.contains("Low priority singleton: id 3"));
+    }
+
+    #[test]
+    fn compact_unified_report_does_not_embed_full_layer_reports() {
+        let graph = report_test_graph();
+        let report = build_compact_unified_knowledge_report(Some(&graph), Some(&graph), "No links");
+
+        assert!(report.contains("# Unified Knowledge Report"));
+        assert!(report.contains("## Repository Layer"));
+        assert!(report.contains("## Session Layer Communities"));
+        assert!(report.contains("## Cross-Layer Summary"));
+        assert!(!report.contains("# Knowledge Report  ("));
     }
 
     #[tokio::test]

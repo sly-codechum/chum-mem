@@ -135,19 +135,22 @@ emit_codex() {
   printf '{"systemMessage":"%s"}\n' "$message"
 }
 
-USER_PROMPT_MSG="ChumMemory graph is fresh (PCKC v2.2.3). Required retrieval order for any code-navigation or recall step: FIRST call MCP knowledge_report(layer:repository) and treat its markdown as primary high-level context; SECOND call repository-layer knowledge_query for architecture/components/relationships; THIRD call mem_search(mode:hybrid, disclosureLevel:overview, small limit); ONLY THEN Read/Grep/Glob/Edit. Before editing a file, call knowledge_query(neighbors, nodeId:'file:<path>', layer:repository) after the prelude. Grep/Glob is fallback only. Three-way hybrid search: lexical + pgvector + Chroma ML. Reports are graphify-style markdown. Load the ChumMemory skill for the full cookbook if unsure."
-SESSION_START_BASE="ChumMemory plugin active (PCKC v2.2.3, MCP server: chum-memory). Multi-project mode: each project folder has its own project ID (auto-resolved via .chum-mem). Repository layer (knowledge_query, knowledge_report, knowledge_communities) is STRICTLY per-project — projectId is required, no global fallback. Session layer knowledge queries fall back to global project if no project-specific snapshot exists. mem_search falls back to global project for historical memories. The hook auto-runs repository_sync before every turn — do NOT call project_import or repository_sync manually. On every code-related prompt use this strict order: MCP knowledge_report(layer:repository) first; repository-layer knowledge_query second; mem_search third; Read/Grep/Glob/Edit last. Two layers: repository (code structure, AST) and session (interaction history). Always pass layer. Three-way hybrid search (lexical + pgvector + Chroma). Typed partitions for per-type precision. Hierarchical communities (level-0 + level-1). Governance: use claim_govern to pin/archive/reject claims. Load the ChumMemory skill for the full cookbook and decision tree."
+USER_PROMPT_MSG="ChumMemory graph is fresh (PCKC v2.2.3). Required retrieval order for any code-navigation or recall step: FIRST call MCP knowledge_report(layer:unified) and treat its compact markdown as primary high-level context; SECOND call repository-layer knowledge_query for architecture/components/relationships; THIRD call mem_search(mode:hybrid, disclosureLevel:overview, small limit); ONLY THEN Read/Grep/Glob/Edit. Before editing a file, call knowledge_query(neighbors, nodeId:'file:<path>', layer:repository) after the prelude. Grep/Glob is fallback only. Three-way hybrid search: lexical + pgvector + Chroma ML. Unified reports include repository digest, session communities, and cross-layer summary. Load the ChumMemory skill for the full cookbook if unsure."
+SESSION_START_BASE="ChumMemory plugin active (PCKC v2.2.3, MCP server: chum-memory). Multi-project mode: each project folder has its own project ID (auto-resolved via .chum-mem). Repository layer (knowledge_query, knowledge_communities, layer-specific knowledge_report) is STRICTLY per-project — projectId is required, no global fallback. Unified knowledge_report keeps repository strict and uses session-layer global fallback for continuity signals. Session layer knowledge queries fall back to global project if no project-specific snapshot exists. mem_search falls back to global project for historical memories. The hook auto-runs repository_sync before every turn — do NOT call project_import or repository_sync manually. On every code-related prompt use this strict order: MCP knowledge_report(layer:unified) first; repository-layer knowledge_query second; mem_search third; Read/Grep/Glob/Edit last. Two layers: repository (code structure, AST) and session (interaction history); unified is report-only. Always pass layer. Three-way hybrid search (lexical + pgvector + Chroma). Typed partitions for per-type precision. Hierarchical communities (level-0 + level-1). Governance: use claim_govern to pin/archive/reject claims. Load the ChumMemory skill for the full cookbook and decision tree."
 
 # ── Fetch knowledge report on session start for codebase context ──
 # Returns a JSON-safe string (newlines escaped) suitable for embedding in
 # the additionalContext field. Empty string on failure.
 fetch_knowledge_report_escaped() {
   local api_url="${CHUM_MEMORY_API_URL:-http://localhost:63001}"
-  local qs="layer=repository"
+  local qs="layer=unified"
   [[ -n "${CHUM_MEM_PROJECT_ID:-}" ]] && qs="${qs}&projectId=${CHUM_MEM_PROJECT_ID}"
   local report=""
   report=$(curl -sf --max-time 5 "${api_url}/api/knowledge/report?${qs}" 2>/dev/null) || return 1
   [[ -z "$report" ]] && return 1
+  if echo "$report" | jq -e '.report.markdown? // empty' >/dev/null 2>&1; then
+    report=$(printf '%s' "$report" | jq -r '.report.markdown')
+  fi
   printf '%s' "${report:0:2000}" | jq -Rs '.' 2>/dev/null | sed 's/^"//;s/"$//' || echo ""
 }
 
@@ -163,7 +166,7 @@ case "$HOOK_EVENT" in
     # Fetch repository knowledge report to prime the session
     KB_REPORT=$(fetch_knowledge_report_escaped 2>/dev/null || echo "")
     if [[ -n "$KB_REPORT" ]]; then
-      SESSION_START_MSG="${SESSION_START_BASE}\\n\\n--- Repository Knowledge Report ---\\n${KB_REPORT}"
+      SESSION_START_MSG="${SESSION_START_BASE}\\n\\n--- Unified Knowledge Report ---\\n${KB_REPORT}"
     else
       SESSION_START_MSG="$SESSION_START_BASE"
     fi

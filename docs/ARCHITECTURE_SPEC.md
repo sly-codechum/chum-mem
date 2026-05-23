@@ -430,7 +430,7 @@ The graph service must support:
 - goal-directed graph retrieval
 - human-readable reports
 
-The runtime supports repository, session, and unified reporting. Public tool schemas should remain aligned with that behavior.
+The runtime supports repository, session, and unified reporting. The unified report is the default agent prelude: a compact, layer-labeled Markdown report with repository digest, bounded session communities, and cross-layer summary. Public tool schemas should remain aligned with that behavior.
 
 ## 11. Search and retrieval
 
@@ -498,7 +498,7 @@ Operational guidance:
 
 Default retrieval workflow:
 
-1. `knowledge_report(layer:"repository")` first, in Markdown form
+1. `knowledge_report(layer:"unified")` first, in Markdown form
 2. repository-layer `knowledge_query` for relevant components, architecture, and relationships
 3. compact `mem_search` after graph context
 4. `memory_get_batch` only for selected IDs

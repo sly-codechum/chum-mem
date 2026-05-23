@@ -157,7 +157,7 @@ Expose these capabilities through MCP tools and thin HTTP wrappers where needed:
 
 All clients should follow the graph-first compact retrieval workflow:
 
-1. `knowledge_report(layer:"repository")` first, in Markdown form, as the primary high-level repository context
+1. `knowledge_report(layer:"unified")` first, in Markdown form, as the primary compact context: repository digest, session communities, and cross-layer summary
 2. repository-layer `knowledge_query` next for components, architecture, and relationships
 3. `mem_search` after graph context, compact output, small `limit`
 4. `memory_get_batch` only for selected IDs
