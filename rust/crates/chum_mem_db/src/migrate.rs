@@ -222,7 +222,7 @@ pub async fn run_migrations(pool: &PgPool) -> Result<MigrationOutcome, Migration
                 record_applied_migration(&mut *tx, file.name, &checksum).await?;
                 tx.commit().await?;
             } else {
-                sqlx::raw_sql(file.contents).execute(&mut *conn).await?;
+                execute_non_transactional_migration(&mut conn, file.contents).await?;
                 record_applied_migration(&mut *conn, file.name, &checksum).await?;
             }
 
@@ -345,6 +345,155 @@ where
     Ok(exists)
 }
 
+async fn execute_non_transactional_migration(
+    conn: &mut sqlx::PgConnection,
+    contents: &str,
+) -> Result<(), sqlx::Error> {
+    for statement in split_sql_statements(contents) {
+        sqlx::raw_sql(statement).execute(&mut *conn).await?;
+    }
+    Ok(())
+}
+
+fn split_sql_statements(contents: &str) -> Vec<&str> {
+    let mut statements = Vec::new();
+    let mut state = SqlScanState::Normal;
+    let mut start = 0;
+    let mut index = 0;
+
+    while index < contents.len() {
+        match state {
+            SqlScanState::Normal => {
+                if contents[index..].starts_with("--") {
+                    state = SqlScanState::LineComment;
+                    index += 2;
+                    continue;
+                }
+                if contents[index..].starts_with("/*") {
+                    state = SqlScanState::BlockComment(1);
+                    index += 2;
+                    continue;
+                }
+                if contents[index..].starts_with('\'') {
+                    state = SqlScanState::SingleQuoted;
+                    index += 1;
+                    continue;
+                }
+                if contents[index..].starts_with('"') {
+                    state = SqlScanState::DoubleQuoted;
+                    index += 1;
+                    continue;
+                }
+                if let Some(delimiter) = dollar_quote_delimiter_at(contents, index) {
+                    state = SqlScanState::DollarQuoted(delimiter);
+                    index += delimiter.len();
+                    continue;
+                }
+                if contents[index..].starts_with(';') {
+                    let end = index + 1;
+                    let statement = contents[start..end].trim();
+                    if !statement.is_empty() {
+                        statements.push(statement);
+                    }
+                    start = end;
+                    index = end;
+                    continue;
+                }
+            }
+            SqlScanState::SingleQuoted => {
+                if contents[index..].starts_with("''") {
+                    index += 2;
+                    continue;
+                }
+                if contents[index..].starts_with('\'') {
+                    state = SqlScanState::Normal;
+                    index += 1;
+                    continue;
+                }
+            }
+            SqlScanState::DoubleQuoted => {
+                if contents[index..].starts_with("\"\"") {
+                    index += 2;
+                    continue;
+                }
+                if contents[index..].starts_with('"') {
+                    state = SqlScanState::Normal;
+                    index += 1;
+                    continue;
+                }
+            }
+            SqlScanState::LineComment => {
+                if contents[index..].starts_with('\n') {
+                    state = SqlScanState::Normal;
+                }
+            }
+            SqlScanState::BlockComment(depth) => {
+                if contents[index..].starts_with("/*") {
+                    state = SqlScanState::BlockComment(depth + 1);
+                    index += 2;
+                    continue;
+                }
+                if contents[index..].starts_with("*/") {
+                    state = if depth == 1 {
+                        SqlScanState::Normal
+                    } else {
+                        SqlScanState::BlockComment(depth - 1)
+                    };
+                    index += 2;
+                    continue;
+                }
+            }
+            SqlScanState::DollarQuoted(delimiter) => {
+                if contents[index..].starts_with(delimiter) {
+                    state = SqlScanState::Normal;
+                    index += delimiter.len();
+                    continue;
+                }
+            }
+        }
+
+        let Some(ch) = contents[index..].chars().next() else {
+            break;
+        };
+        index += ch.len_utf8();
+    }
+
+    let statement = contents[start..].trim();
+    if !statement.is_empty() {
+        statements.push(statement);
+    }
+
+    statements
+}
+
+#[derive(Debug, Clone, Copy)]
+enum SqlScanState<'a> {
+    Normal,
+    SingleQuoted,
+    DoubleQuoted,
+    LineComment,
+    BlockComment(usize),
+    DollarQuoted(&'a str),
+}
+
+fn dollar_quote_delimiter_at(contents: &str, index: usize) -> Option<&str> {
+    if !contents[index..].starts_with('$') {
+        return None;
+    }
+
+    let rest = &contents[index + 1..];
+    let tag_end = rest.find('$')?;
+    let tag = &rest[..tag_end];
+    if !tag
+        .chars()
+        .all(|ch| ch == '_' || ch.is_ascii_alphanumeric())
+    {
+        return None;
+    }
+
+    Some(&contents[index..index + tag_end + 2])
+}
+
 fn checksum(contents: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(contents.as_bytes());
@@ -386,5 +535,58 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert_eq!(registry_migrations, disk_migrations);
+    }
+
+    #[test]
+    fn migrations_with_concurrent_index_operations_are_non_transactional() {
+        for file in MIGRATION_FILES {
+            if file.contents.to_uppercase().contains(" CONCURRENTLY") {
+                assert!(
+                    !file.transactional,
+                    "{} contains CONCURRENTLY and must run outside transactions",
+                    file.name
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn non_transactional_split_keeps_dollar_quoted_blocks_together() {
+        let sql = r#"
+        CREATE INDEX CONCURRENTLY IF NOT EXISTS example_idx ON public.examples (id);
+        DO $$
+        BEGIN
+          RAISE NOTICE 'semicolon; inside dollar quote';
+        END $$;
+        CREATE OR REPLACE FUNCTION public.example()
+        RETURNS void LANGUAGE plpgsql AS $fn$
+        BEGIN
+          RAISE NOTICE 'another; semicolon';
+        END;
+        $fn$;
+        "#;
+
+        let statements = split_sql_statements(sql);
+
+        assert_eq!(statements.len(), 3);
+        assert!(statements[0].starts_with("CREATE INDEX CONCURRENTLY"));
+        assert!(statements[1].starts_with("DO $$"));
+        assert!(statements[2].starts_with("CREATE OR REPLACE FUNCTION"));
+    }
+
+    #[test]
+    fn non_transactional_split_ignores_comment_and_quoted_semicolons() {
+        let sql = r#"
+        -- comment; with delimiter
+        CREATE INDEX CONCURRENTLY IF NOT EXISTS one_idx ON public.examples ("semi;colon");
+        /* block; comment */
+        CREATE INDEX CONCURRENTLY IF NOT EXISTS two_idx ON public.examples ((lower('x;y')));
+        "#;
+
+        let statements = split_sql_statements(sql);
+
+        assert_eq!(statements.len(), 2);
+        assert!(statements[0].contains("one_idx"));
+        assert!(statements[1].contains("two_idx"));
     }
 }
