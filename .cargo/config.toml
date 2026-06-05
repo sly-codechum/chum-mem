@@ -1,2 +1,8 @@
 [build]
 target-dir = "target"
+
+[target.aarch64-apple-darwin]
+linker = "scripts/rust-lld-darwin.sh"
+
+[target.x86_64-apple-darwin]
+linker = "scripts/rust-lld-darwin.sh"

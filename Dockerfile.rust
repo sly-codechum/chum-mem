@@ -9,7 +9,9 @@ WORKDIR /app
 
 RUN --mount=type=cache,target=/var/cache/apk,sharing=locked \
     ln -s /var/cache/apk /etc/apk/cache \
-    && apk add --no-cache build-base pkgconf perl ca-certificates
+    && apk add --no-cache build-base pkgconf perl ca-certificates lld
+
+ENV RUSTFLAGS="-C link-arg=-fuse-ld=lld"
 
 RUN --mount=type=bind,source=Cargo.toml,target=/app/Cargo.toml,readonly \
     --mount=type=bind,source=Cargo.lock,target=/app/Cargo.lock,readonly \
