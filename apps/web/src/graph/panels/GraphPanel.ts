@@ -22,6 +22,12 @@ const CATEGORY_FILTERS: [string, string, string][] = [
 const LAYERS = ['session', 'repository'] as const;
 type Layer = typeof LAYERS[number];
 
+const GLOBAL_GRAPH_INITIAL_MAX_NODES = 1_200;
+const GLOBAL_GRAPH_INITIAL_MAX_EDGES = 12_000;
+const GLOBAL_GRAPH_INCREMENT_MAX_NODES = 1_200;
+const GLOBAL_GRAPH_INCREMENT_MAX_EDGES = 12_000;
+const GLOBAL_GRAPH_INCREMENT_MS = 2_000;
+
 interface PathState {
   active: boolean;
   source: GraphNode | null;
@@ -44,6 +50,9 @@ export class GraphPanel extends Panel {
   private currentLayer: Layer = 'session';
   private currentProjectId: string | undefined = undefined;
   private projects: { id: string; name: string }[] = [];
+  private globalGraphMaxNodes = GLOBAL_GRAPH_INITIAL_MAX_NODES;
+  private globalGraphMaxEdges = GLOBAL_GRAPH_INITIAL_MAX_EDGES;
+  private globalGraphExpandTimer: ReturnType<typeof setTimeout> | null = null;
   private pathState: PathState = { active: false, source: null };
   private mounted = false;
 
@@ -143,6 +152,7 @@ export class GraphPanel extends Panel {
   }
 
   destroy(): void {
+    this.clearGlobalGraphExpandTimer();
     this.engine?.dispose();
     this.engine = null;
     this.mounted = false;
@@ -344,6 +354,7 @@ export class GraphPanel extends Panel {
         layerGroup.querySelectorAll('label').forEach(l => l.classList.remove('active'));
         lbl.classList.add('active');
         this.currentLayer = layer;
+        this.resetGlobalGraphLimits();
         void this.reloadGraph(layer);
       });
       layerGroup.appendChild(lbl);
@@ -360,6 +371,7 @@ export class GraphPanel extends Panel {
     projectSelect.appendChild(allOption);
     projectSelect.addEventListener('change', () => {
       this.currentProjectId = projectSelect.value || undefined;
+      this.resetGlobalGraphLimits();
       bus.emit('project-change', { projectId: this.currentProjectId });
       void this.reloadGraph(this.currentLayer);
     });
@@ -444,7 +456,9 @@ export class GraphPanel extends Panel {
 
   private async fetchProjectsThenLoad(): Promise<void> {
     try {
-      const data = await ApiClient.getProjects() as { projects?: { id: string; name: string }[] } | null;
+      const data = await ApiClient.getProjects() as {
+        projects?: { id: string; name: string }[];
+      } | null;
       this.projects = data?.projects ?? [];
       const select = this.toolbar?.querySelector<HTMLSelectElement>('.project-select');
       if (select) {
@@ -455,9 +469,8 @@ export class GraphPanel extends Panel {
           opt.textContent = p.name;
           select.appendChild(opt);
         }
-        if (this.projects.length === 1) {
-          this.currentProjectId = this.projects[0]!.id;
-          select.value = this.currentProjectId;
+        if (this.currentProjectId) {
+          bus.emit('project-change', { projectId: this.currentProjectId });
         }
       }
     } catch {
@@ -468,14 +481,20 @@ export class GraphPanel extends Panel {
 
   private async loadGraph(): Promise<void> {
     if (!this.engine) return;
+    this.clearGlobalGraphExpandTimer();
     this.showLoading('Fetching graph data...');
     try {
-      const payload = await ApiClient.getGraph(this.currentLayer, this.currentProjectId) as GraphApiPayload | null;
+      const payload = await ApiClient.getGraph(
+        this.currentLayer,
+        this.currentProjectId,
+        this.graphLimits(),
+      ) as GraphApiPayload | null;
       if (!payload) throw new Error('No payload');
       this.setLoadingProgress(0);
       await this.engine.loadFromApiAsync(payload, (frac) => {
         this.setLoadingProgress(frac);
       });
+      this.scheduleGlobalGraphExpansion(payload);
       this.updateStats();
       this.graphReady = true;
       this.hideLoading();
@@ -494,11 +513,18 @@ export class GraphPanel extends Panel {
 
   private async reloadGraph(layer: Layer): Promise<void> {
     if (!this.engine) return;
+    this.clearGlobalGraphExpandTimer();
     this.showLoading('Fetching graph data...');
     try {
-      await this.engine.reloadGraph(layer, (frac) => {
-        this.setLoadingProgress(frac);
-      }, this.currentProjectId);
+      const payload = await this.engine.reloadGraph(
+        layer,
+        (frac) => {
+          this.setLoadingProgress(frac);
+        },
+        this.currentProjectId,
+        this.graphLimits(),
+      );
+      this.scheduleGlobalGraphExpansion(payload);
       this.applyFilter();
       this.updateStats();
       this.hideLoading();
@@ -506,6 +532,72 @@ export class GraphPanel extends Panel {
       this.hideLoading();
       if (this.graphInfo) this.graphInfo.textContent = 'Graph unavailable';
       console.error('GraphPanel: reload failed', e);
+    }
+  }
+
+  private graphLimits(): { maxNodes?: number; maxEdges?: number } | undefined {
+    if (this.currentProjectId) return undefined;
+    return {
+      maxNodes: this.globalGraphMaxNodes,
+      maxEdges: this.globalGraphMaxEdges,
+    };
+  }
+
+  private resetGlobalGraphLimits(): void {
+    this.globalGraphMaxNodes = GLOBAL_GRAPH_INITIAL_MAX_NODES;
+    this.globalGraphMaxEdges = GLOBAL_GRAPH_INITIAL_MAX_EDGES;
+    this.clearGlobalGraphExpandTimer();
+  }
+
+  private clearGlobalGraphExpandTimer(): void {
+    if (!this.globalGraphExpandTimer) return;
+    clearTimeout(this.globalGraphExpandTimer);
+    this.globalGraphExpandTimer = null;
+  }
+
+  private scheduleGlobalGraphExpansion(payload: GraphApiPayload): void {
+    this.clearGlobalGraphExpandTimer();
+    if (this.currentProjectId) return;
+
+    const projection = payload.projection;
+    if (!projection) return;
+
+    const returnedNodes = projection.returnedNodes ?? payload.nodes.length;
+    const returnedEdges = projection.returnedEdges ?? (payload.links ?? payload.edges ?? []).length;
+    const complete =
+      returnedNodes >= projection.totalNodes &&
+      returnedEdges >= projection.totalEdges;
+    if (complete) return;
+
+    this.globalGraphExpandTimer = setTimeout(() => {
+      this.globalGraphExpandTimer = null;
+      this.globalGraphMaxNodes = Math.min(
+        this.globalGraphMaxNodes + GLOBAL_GRAPH_INCREMENT_MAX_NODES,
+        projection.totalNodes,
+      );
+      this.globalGraphMaxEdges = Math.min(
+        this.globalGraphMaxEdges + GLOBAL_GRAPH_INCREMENT_MAX_EDGES,
+        projection.totalEdges,
+      );
+      void this.expandGlobalGraph();
+    }, GLOBAL_GRAPH_INCREMENT_MS);
+  }
+
+  private async expandGlobalGraph(): Promise<void> {
+    if (!this.engine || this.currentProjectId) return;
+    try {
+      const payload = await ApiClient.getGraph(
+        this.currentLayer,
+        undefined,
+        this.graphLimits(),
+      ) as GraphApiPayload | null;
+      if (!payload) return;
+      this.engine.mergeFromApi(payload);
+      this.applyFilter();
+      this.updateStats();
+      this.scheduleGlobalGraphExpansion(payload);
+    } catch (e) {
+      console.error('GraphPanel: incremental graph expansion failed', e);
     }
   }
 

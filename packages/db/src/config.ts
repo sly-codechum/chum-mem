@@ -10,7 +10,10 @@ export const databaseEnvSchema = z.object({
   CHROMA_COLLECTION: z.string().min(1).default('memories'),
   CHUM_MEM_ORGANIZATION_ID: z.string().uuid(),
   CHUM_MEM_TEAM_ID: z.string().uuid(),
-  CHUM_MEM_PROJECT_ID: z.string().uuid().optional(),
+  CHUM_MEM_PROJECT_ID: z.preprocess(
+    (value) => value === '' ? undefined : value,
+    z.string().uuid().optional(),
+  ),
   CHUM_MEM_USER_ID: z.string().uuid().optional(),
   CHUM_MEM_ACTOR_TYPE: z.enum(['user', 'token', 'system']).default('system'),
   CHUM_MEM_TEAM_ROLE: z.enum(['owner', 'admin', 'member']).default('admin'),

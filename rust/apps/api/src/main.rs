@@ -49,8 +49,8 @@ use chum_mem_pipeline::{
     build_session_completion_job_plan, community_relevance_from_query, compile_minimal_proof_set,
     derive_memories_from_session, derive_session_episodes, embed_text, event_text,
     generate_knowledge_report, memory_community_map, merge_graphs, merge_hybrid_results,
-    progressive_disclosure, query_chroma_memories_typed, rank_hybrid_results, run_knowledge_query,
-    score_session_relationship, to_node_link_json,
+    progressive_disclosure, project_graph_for_dashboard, query_chroma_memories_typed,
+    rank_hybrid_results, run_knowledge_query, score_session_relationship, to_node_link_json,
 };
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
@@ -89,6 +89,10 @@ const API_ROUTES: &[&str] = &[
     "GET /mcp",
     "DELETE /mcp",
 ];
+const DASHBOARD_GLOBAL_GRAPH_DEFAULT_MAX_NODES: usize = 1_200;
+const DASHBOARD_GLOBAL_GRAPH_DEFAULT_MAX_EDGES: usize = 12_000;
+const DASHBOARD_GRAPH_HARD_MAX_NODES: usize = 40_000;
+const DASHBOARD_GRAPH_HARD_MAX_EDGES: usize = 400_000;
 
 const SEARCH_PROVENANCE_LIMIT_DEFAULT: i64 = 2;
 const CONTEXT_BUILD_SEARCH_LIMIT: u32 = 12;
@@ -174,6 +178,8 @@ impl IntoResponse for ApiError {
 struct ProjectScopedQuery {
     project_id: Option<Uuid>,
     layer: Option<String>,
+    max_nodes: Option<usize>,
+    max_edges: Option<usize>,
 }
 
 #[derive(Debug, Serialize)]
@@ -474,9 +480,15 @@ async fn dashboard_graph(
     State(state): State<ApiState>,
     Query(query): Query<ProjectScopedQuery>,
 ) -> Result<Response, ApiError> {
-    let response = perform_dashboard_graph(&state, query.project_id, query.layer.as_deref())
-        .await
-        .map_err(map_domain_error)?;
+    let response = perform_dashboard_graph(
+        &state,
+        query.project_id,
+        query.layer.as_deref(),
+        query.max_nodes,
+        query.max_edges,
+    )
+    .await
+    .map_err(map_domain_error)?;
     Ok((StatusCode::OK, Json(response)).into_response())
 }
 
@@ -670,7 +682,7 @@ async fn handle_mcp_call(
             )
         }
         "graph_snapshot" => {
-            let result = perform_dashboard_graph(state, None, None)
+            let result = perform_dashboard_graph(state, None, None, None, None)
                 .await
                 .map_err(|e| format!("{e:?}"))?;
             Ok(
@@ -2181,9 +2193,101 @@ async fn perform_dashboard_graph(
     state: &ApiState,
     project_id: Option<Uuid>,
     layer: Option<&str>,
+    max_nodes: Option<usize>,
+    max_edges: Option<usize>,
 ) -> Result<DashboardGraphResponse, DomainError> {
     let context = scoped_context(&state.scope, project_id)?;
     let mut tx = begin_tx(state, &context).await?;
+    let limits = dashboard_graph_limits(project_id.is_none(), max_nodes, max_edges);
+
+    if project_id.is_none() {
+        let response = match layer {
+            Some("repository") => {
+                match load_projected_merged_snapshots_by_type(
+                    &mut tx,
+                    &context,
+                    "repository",
+                    limits.expect("global dashboard graph limits are always present"),
+                )
+                .await?
+                {
+                    Some((graph, total_nodes, total_edges)) => {
+                        map_dashboard_graph_with_projection_totals(graph, total_nodes, total_edges)
+                    }
+                    None => {
+                        let nodes = load_memory_graph_nodes(&mut tx, &context, i64::MAX).await?;
+                        let links = load_memory_graph_edges(&mut tx, &context, i64::MAX).await?;
+                        map_dashboard_graph_fallback(nodes, links, limits)
+                    }
+                }
+            }
+            Some("session") => {
+                match load_projected_merged_snapshots_by_type(
+                    &mut tx,
+                    &context,
+                    "session",
+                    limits.expect("global dashboard graph limits are always present"),
+                )
+                .await?
+                {
+                    Some((graph, total_nodes, total_edges)) => {
+                        map_dashboard_graph_with_projection_totals(graph, total_nodes, total_edges)
+                    }
+                    None => {
+                        let nodes = load_memory_graph_nodes(&mut tx, &context, i64::MAX).await?;
+                        let links = load_memory_graph_edges(&mut tx, &context, i64::MAX).await?;
+                        map_dashboard_graph_fallback(nodes, links, limits)
+                    }
+                }
+            }
+            _ => {
+                let (max_nodes, max_edges) =
+                    limits.expect("global dashboard graph limits are always present");
+                let repo_budget = ((max_nodes / 2).max(1), (max_edges / 2).max(1));
+                let session_budget = (
+                    max_nodes.saturating_sub(repo_budget.0).max(1),
+                    max_edges.saturating_sub(repo_budget.1).max(1),
+                );
+                let repo = load_projected_merged_snapshots_by_type(
+                    &mut tx,
+                    &context,
+                    "repository",
+                    repo_budget,
+                )
+                .await?;
+                let session = load_projected_merged_snapshots_by_type(
+                    &mut tx,
+                    &context,
+                    "session",
+                    session_budget,
+                )
+                .await?;
+
+                match (repo, session) {
+                    (
+                        Some((repo_graph, repo_nodes, repo_edges)),
+                        Some((session_graph, session_nodes, session_edges)),
+                    ) => map_dashboard_graph_with_projection_totals(
+                        merge_graphs(&repo_graph, &session_graph),
+                        repo_nodes + session_nodes,
+                        repo_edges + session_edges,
+                    ),
+                    (Some((graph, total_nodes, total_edges)), None)
+                    | (None, Some((graph, total_nodes, total_edges))) => {
+                        map_dashboard_graph_with_projection_totals(graph, total_nodes, total_edges)
+                    }
+                    (None, None) => {
+                        let nodes = load_memory_graph_nodes(&mut tx, &context, i64::MAX).await?;
+                        let links = load_memory_graph_edges(&mut tx, &context, i64::MAX).await?;
+                        map_dashboard_graph_fallback(nodes, links, limits)
+                    }
+                }
+            }
+        };
+        commit_tx(tx).await?;
+        return Ok(response);
+    }
+
     // When the caller specifies a layer, return only that layer's snapshot.
     // When no layer is specified (e.g. the MCP graph_snapshot tool), merge
     // both layers so callers without layer awareness see the full graph.
@@ -2221,27 +2325,13 @@ async fn perform_dashboard_graph(
     let response = match (repo_snapshot, session_snapshot) {
         (Some(repo), Some(session)) => {
             let merged = merge_graphs(&repo, &session);
-            let projection = GraphProjection {
-                total_nodes: merged.nodes.len(),
-                total_edges: merged.edges.len(),
-                returned_nodes: merged.nodes.len(),
-                returned_edges: merged.edges.len(),
-            };
-            map_dashboard_graph(merged, projection)
+            map_dashboard_graph_with_limits(merged, limits)
         }
-        (Some(graph), None) | (None, Some(graph)) => {
-            let projection = GraphProjection {
-                total_nodes: graph.nodes.len(),
-                total_edges: graph.edges.len(),
-                returned_nodes: graph.nodes.len(),
-                returned_edges: graph.edges.len(),
-            };
-            map_dashboard_graph(graph, projection)
-        }
+        (Some(graph), None) | (None, Some(graph)) => map_dashboard_graph_with_limits(graph, limits),
         (None, None) => {
             let nodes = load_memory_graph_nodes(&mut tx, &context, i64::MAX).await?;
             let links = load_memory_graph_edges(&mut tx, &context, i64::MAX).await?;
-            map_dashboard_graph_fallback(nodes, links)
+            map_dashboard_graph_fallback(nodes, links, limits)
         }
     };
     commit_tx(tx).await?;
@@ -4346,19 +4436,91 @@ fn map_dashboard_graph(
     }
 }
 
+fn map_dashboard_graph_with_projection_totals(
+    graph: KnowledgeGraph,
+    total_nodes: usize,
+    total_edges: usize,
+) -> DashboardGraphResponse {
+    let projection = GraphProjection {
+        total_nodes,
+        total_edges,
+        returned_nodes: graph.nodes.len(),
+        returned_edges: graph.edges.len(),
+    };
+    map_dashboard_graph(graph, projection)
+}
+
+fn dashboard_graph_limits(
+    global_request: bool,
+    max_nodes: Option<usize>,
+    max_edges: Option<usize>,
+) -> Option<(usize, usize)> {
+    let default_nodes = if global_request {
+        Some(DASHBOARD_GLOBAL_GRAPH_DEFAULT_MAX_NODES)
+    } else {
+        None
+    };
+    let default_edges = if global_request {
+        Some(DASHBOARD_GLOBAL_GRAPH_DEFAULT_MAX_EDGES)
+    } else {
+        None
+    };
+    let nodes = max_nodes.or(default_nodes)?;
+    let edges = max_edges.or(default_edges)?;
+    Some((
+        nodes.clamp(1, DASHBOARD_GRAPH_HARD_MAX_NODES),
+        edges.clamp(1, DASHBOARD_GRAPH_HARD_MAX_EDGES),
+    ))
+}
+
+fn map_dashboard_graph_with_limits(
+    graph: KnowledgeGraph,
+    limits: Option<(usize, usize)>,
+) -> DashboardGraphResponse {
+    if let Some((max_nodes, max_edges)) = limits {
+        let (projected, projection) = project_graph_for_dashboard(&graph, max_nodes, max_edges);
+        map_dashboard_graph(projected, projection)
+    } else {
+        let projection = GraphProjection {
+            total_nodes: graph.nodes.len(),
+            total_edges: graph.edges.len(),
+            returned_nodes: graph.nodes.len(),
+            returned_edges: graph.edges.len(),
+        };
+        map_dashboard_graph(graph, projection)
+    }
+}
+
 fn map_dashboard_graph_fallback(
     nodes: Vec<DashboardGraphNodeRow>,
     edges: Vec<DashboardGraphEdgeRow>,
+    limits: Option<(usize, usize)>,
 ) -> DashboardGraphResponse {
+    let total_nodes = nodes.len();
+    let total_edges = edges.len();
+    let (max_nodes, max_edges) = limits.unwrap_or((total_nodes, total_edges));
+    let returned_nodes = total_nodes.min(max_nodes);
+    let kept_node_ids = nodes
+        .iter()
+        .take(returned_nodes)
+        .map(|node| node.id)
+        .collect::<HashSet<_>>();
+    let returned_edges = edges
+        .iter()
+        .filter(|edge| kept_node_ids.contains(&edge.source) && kept_node_ids.contains(&edge.target))
+        .take(max_edges)
+        .count();
+
     DashboardGraphResponse {
         projection: GraphProjection {
-            total_nodes: nodes.len(),
-            total_edges: edges.len(),
-            returned_nodes: nodes.len(),
-            returned_edges: edges.len(),
+            total_nodes,
+            total_edges,
+            returned_nodes,
+            returned_edges,
         },
         nodes: nodes
             .into_iter()
+            .take(returned_nodes)
             .map(|node| GraphNode {
                 id: format!("memory:{}", node.id),
                 label: node.title,
@@ -4368,6 +4530,10 @@ fn map_dashboard_graph_fallback(
             .collect(),
         links: edges
             .into_iter()
+            .filter(|edge| {
+                kept_node_ids.contains(&edge.source) && kept_node_ids.contains(&edge.target)
+            })
+            .take(max_edges)
             .map(|edge| GraphLink {
                 source: format!("memory:{}", edge.source),
                 target: format!("memory:{}", edge.target),
@@ -4448,6 +4614,88 @@ async fn load_merged_snapshots_by_type(
         });
     }
     Ok(merged)
+}
+
+async fn load_projected_merged_snapshots_by_type(
+    tx: &mut Transaction<'_, Postgres>,
+    context: &RepositoryContext,
+    snapshot_type: &str,
+    limits: (usize, usize),
+) -> Result<Option<(KnowledgeGraph, usize, usize)>, DomainError> {
+    let rows = sqlx::query(
+        r#"
+        select distinct on (project_id)
+          id,
+          node_count,
+          edge_count
+        from public.knowledge_snapshots
+        where organization_id = $1
+          and team_id = $2
+          and snapshot_type = $3
+        order by project_id, created_at desc
+        "#,
+    )
+    .bind(context.organization_id)
+    .bind(context.team_id)
+    .bind(snapshot_type)
+    .fetch_all(&mut **tx)
+    .await
+    .map_err(DbError::from)?;
+
+    if rows.is_empty() {
+        return Ok(None);
+    }
+
+    let total_nodes = rows.iter().try_fold(0usize, |acc, row| {
+        let count = row.try_get::<i32, _>("node_count").map_err(DbError::from)?;
+        Ok::<_, DomainError>(acc.saturating_add(usize::try_from(count).unwrap_or_default()))
+    })?;
+    let total_edges = rows.iter().try_fold(0usize, |acc, row| {
+        let count = row.try_get::<i32, _>("edge_count").map_err(DbError::from)?;
+        Ok::<_, DomainError>(acc.saturating_add(usize::try_from(count).unwrap_or_default()))
+    })?;
+
+    let (max_nodes, max_edges) = limits;
+    let mut merged: Option<KnowledgeGraph> = None;
+
+    for row in rows {
+        let returned_nodes = merged.as_ref().map_or(0, |graph| graph.nodes.len());
+        let returned_edges = merged.as_ref().map_or(0, |graph| graph.edges.len());
+        if returned_nodes >= max_nodes && returned_edges >= max_edges {
+            break;
+        }
+
+        let snapshot_id = row.try_get::<Uuid, _>("id").map_err(DbError::from)?;
+        let Some(snapshot_row) = sqlx::query(
+            r#"
+            select snapshot
+            from public.knowledge_snapshots
+            where id = $1
+            "#,
+        )
+        .bind(snapshot_id)
+        .fetch_optional(&mut **tx)
+        .await
+        .map_err(DbError::from)?
+        else {
+            continue;
+        };
+
+        let snapshot = snapshot_row
+            .try_get::<Value, _>("snapshot")
+            .map_err(DbError::from)?;
+        let graph: KnowledgeGraph = serde_json::from_value(snapshot)
+            .map_err(|error| DomainError::Internal(error.to_string()))?;
+        let remaining_nodes = max_nodes.saturating_sub(returned_nodes).max(1);
+        let remaining_edges = max_edges.saturating_sub(returned_edges).max(1);
+        let (projected, _) = project_graph_for_dashboard(&graph, remaining_nodes, remaining_edges);
+        merged = Some(match merged {
+            Some(base) => merge_graphs(&base, &projected),
+            None => projected,
+        });
+    }
+
+    Ok(merged.map(|graph| (graph, total_nodes, total_edges)))
 }
 
 async fn load_latest_snapshot_artifacts_by_type(

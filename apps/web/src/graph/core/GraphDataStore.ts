@@ -32,6 +32,75 @@ export class GraphDataStore {
    * (files, docs, sessions, episodes, errors, claims).
    */
   setApiData(nodes: GraphNode[], links: GraphLink[], totalNodes?: number, totalEdges?: number): void {
+    const interleaved = this.interleaveNodesByCategory(nodes, links);
+
+    this.allNodes = interleaved;
+    this.allLinks = links;
+    this.totalApiNodes = totalNodes ?? nodes.length;
+    this.totalApiEdges = totalEdges ?? links.length;
+  }
+
+  /**
+   * Merge a larger capped API response into the current visible graph.
+   * Preserves existing node order/positions and appends only newly returned
+   * nodes; links are deduplicated and reindexed against the visible set.
+   */
+  mergeApiData(nodes: GraphNode[], links: GraphLink[], totalNodes?: number, totalEdges?: number): {
+    prevCount: number;
+    newCount: number;
+    nodesAdded: boolean;
+    linksChanged: boolean;
+  } | null {
+    const prevCount = this.nodes.length;
+    const prevLinkCount = this.allLinks.length;
+    const previousLinkKeys = new Set(this.allLinks.map(linkKey));
+    const nodeById = new Map(this.allNodes.map((node) => [node.id, node]));
+    const mergedNodes = [...this.allNodes];
+
+    const incomingNodes = this.interleaveNodesByCategory(nodes, links);
+    for (const node of incomingNodes) {
+      if (nodeById.has(node.id)) {
+        nodeById.set(node.id, { ...nodeById.get(node.id), ...node });
+        continue;
+      }
+      nodeById.set(node.id, node);
+      mergedNodes.push(node);
+    }
+
+    const mergedLinks = [...this.allLinks];
+    for (const link of links) {
+      const key = linkKey(link);
+      if (previousLinkKeys.has(key)) continue;
+      previousLinkKeys.add(key);
+      mergedLinks.push(link);
+    }
+
+    for (let i = 0; i < mergedNodes.length; i++) {
+      const updated = nodeById.get(mergedNodes[i]!.id);
+      if (updated) mergedNodes[i] = updated;
+    }
+
+    this.allNodes = mergedNodes;
+    this.allLinks = mergedLinks;
+    this.totalApiNodes = totalNodes ?? Math.max(this.totalApiNodes, nodes.length);
+    this.totalApiEdges = totalEdges ?? Math.max(this.totalApiEdges, links.length);
+    this.visibleTarget = this.allNodes.length;
+    this.nodes = this.allNodes.slice();
+    this.rebuildLinkIndex();
+
+    const nodesAdded = this.nodes.length > prevCount;
+    const linksChanged = mergedLinks.length !== prevLinkCount;
+    if (!nodesAdded && !linksChanged) return null;
+
+    return {
+      prevCount,
+      newCount: this.nodes.length,
+      nodesAdded,
+      linksChanged,
+    };
+  }
+
+  private interleaveNodesByCategory(nodes: GraphNode[], links: GraphLink[]): GraphNode[] {
     const degree = new Map<string, number>();
     for (const l of links) {
       degree.set(l.source, (degree.get(l.source) ?? 0) + 1);
@@ -63,11 +132,7 @@ export class GraphDataStore {
         remaining--;
       }
     }
-
-    this.allNodes = interleaved;
-    this.allLinks = links;
-    this.totalApiNodes = totalNodes ?? nodes.length;
-    this.totalApiEdges = totalEdges ?? links.length;
+    return interleaved;
   }
 
   get allNodeCount(): number {
@@ -187,4 +252,8 @@ export class GraphDataStore {
       }
     }
   }
+}
+
+function linkKey(link: GraphLink): string {
+  return `${link.source}\u0000${link.target}\u0000${link.relation ?? ''}`;
 }
