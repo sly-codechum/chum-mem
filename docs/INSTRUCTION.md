@@ -8,7 +8,7 @@ The current target is the v2.2.3 PCKC runtime:
 - proof is the unit of trust
 - compiled minimal proof sets are the unit of context
 - repository and session graphs are first-class retrieval surfaces
-- retrieval is hybrid: PostgreSQL lexical + pgvector + Chroma typed partitions
+- retrieval is hybrid: PostgreSQL lexical + graph-aware ranking + adapter-backed typed vector partitions
 
 The product should capture session activity, derive durable typed memory with provenance, make it searchable, and inject compact evidence into future sessions through MCP tools and API endpoints.
 
@@ -23,7 +23,7 @@ Support normalized AI clients as first-class providers. Claude, Codex, and Gemin
 
 Run `chum-mem` as:
 
-- a self-hosted MCP server backed by PostgreSQL, pgvector, and Chroma-assisted retrieval
+- a self-hosted MCP server backed by PostgreSQL and adapter-backed vector retrieval, with Chroma as the default backend and TurboVec available behind `VECTOR_STORE_BACKEND=turbovec`
 - a multi-tenant service with organizations, teams, members, projects, and user-generated API tokens
 - a graph-backed repository and session memory system, not only a transcript store
 

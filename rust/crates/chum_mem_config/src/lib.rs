@@ -6,6 +6,7 @@
 use std::collections::HashMap;
 use std::env;
 use std::net::{IpAddr, SocketAddr};
+use std::path::PathBuf;
 use std::str::FromStr;
 use std::time::Duration;
 
@@ -21,6 +22,24 @@ pub enum ServiceKind {
     Web,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VectorStoreBackend {
+    Chroma,
+    TurboVec,
+}
+
+impl FromStr for VectorStoreBackend {
+    type Err = ();
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "chroma" | "chromadb" => Ok(Self::Chroma),
+            "turbovec" | "turbo_vec" | "turbo-vec" => Ok(Self::TurboVec),
+            _ => Err(()),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct AppConfig {
     pub database_url: String,
@@ -34,8 +53,11 @@ pub struct AppConfig {
     pub mcp_port: u16,
     pub web_port: u16,
     pub dashboard_api_url: Url,
+    pub vector_store_backend: VectorStoreBackend,
     pub chroma_url: Option<Url>,
     pub chroma_collection: String,
+    pub turbovec_path: Option<PathBuf>,
+    pub turbovec_bit_width: usize,
     pub organization_id: Uuid,
     pub team_id: Uuid,
     pub project_id: Option<Uuid>,
@@ -63,6 +85,25 @@ impl AppConfig {
     }
 
     pub fn from_map(values: &HashMap<String, String>) -> Result<Self, ConfigError> {
+        let vector_store_backend =
+            parse_or_default(values, "VECTOR_STORE_BACKEND", VectorStoreBackend::Chroma)?;
+        let turbovec_path = optional(values, "TURBOVEC_PATH").map(PathBuf::from);
+        let turbovec_bit_width = if vector_store_backend == VectorStoreBackend::TurboVec {
+            let bit_width = parse_or_default(values, "TURBOVEC_BIT_WIDTH", 4usize)?;
+            if !(2..=4).contains(&bit_width) {
+                return Err(ConfigError::Invalid {
+                    key: "TURBOVEC_BIT_WIDTH",
+                    value: bit_width.to_string(),
+                });
+            }
+            if turbovec_path.is_none() {
+                return Err(ConfigError::Missing("TURBOVEC_PATH"));
+            }
+            bit_width
+        } else {
+            4
+        };
+
         Ok(Self {
             database_url: required(values, "DATABASE_URL")?,
             db_min_connections: parse_or_default(values, "DB_MIN_CONNECTIONS", 1u32)?,
@@ -79,9 +120,12 @@ impl AppConfig {
                 "DASHBOARD_API_URL",
                 Url::parse("http://localhost:65301").expect("static dashboard URL is valid"),
             )?,
+            vector_store_backend,
             chroma_url: optional_parse(values, "CHROMA_URL")?,
             chroma_collection: optional(values, "CHROMA_COLLECTION")
                 .unwrap_or_else(|| "memories".to_string()),
+            turbovec_path,
+            turbovec_bit_width,
             organization_id: parse_required(values, "CHUM_MEM_ORGANIZATION_ID")?,
             team_id: parse_required(values, "CHUM_MEM_TEAM_ID")?,
             project_id: optional_parse(values, "CHUM_MEM_PROJECT_ID")?,
@@ -135,7 +179,15 @@ impl AppConfig {
     }
 
     pub fn chroma_enabled(&self) -> bool {
-        self.chroma_url.is_some()
+        self.vector_store_backend == VectorStoreBackend::Chroma && self.chroma_url.is_some()
+    }
+
+    pub fn turbovec_enabled(&self) -> bool {
+        self.vector_store_backend == VectorStoreBackend::TurboVec && self.turbovec_path.is_some()
+    }
+
+    pub fn vector_store_enabled(&self) -> bool {
+        self.chroma_enabled() || self.turbovec_enabled()
     }
 }
 
@@ -223,7 +275,85 @@ mod tests {
         assert_eq!(config.web_port, 65300);
         assert_eq!(config.worker_poll_interval_ms, 5_000);
         assert!(config.run_db_migrations);
+        assert_eq!(config.vector_store_backend, VectorStoreBackend::Chroma);
         assert!(!config.chroma_enabled());
+        assert!(!config.vector_store_enabled());
+    }
+
+    #[test]
+    fn enables_turbovec_backend_when_configured() {
+        let mut values = fixture();
+        values.insert("VECTOR_STORE_BACKEND".to_string(), "turbovec".to_string());
+        values.insert(
+            "TURBOVEC_PATH".to_string(),
+            "/tmp/chum-turbovec".to_string(),
+        );
+
+        let config = AppConfig::from_map(&values).expect("config should parse");
+        assert_eq!(config.vector_store_backend, VectorStoreBackend::TurboVec);
+        assert!(!config.chroma_enabled());
+        assert!(config.turbovec_enabled());
+        assert!(config.vector_store_enabled());
+    }
+
+    #[test]
+    fn rejects_unknown_vector_store_backend() {
+        let mut values = fixture();
+        values.insert("VECTOR_STORE_BACKEND".to_string(), "unknown".to_string());
+
+        let error = AppConfig::from_map(&values).expect_err("unknown backend should fail");
+        assert_eq!(
+            error,
+            ConfigError::Invalid {
+                key: "VECTOR_STORE_BACKEND",
+                value: "unknown".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn requires_turbovec_path_only_for_turbovec_backend() {
+        let mut values = fixture();
+        values.insert("VECTOR_STORE_BACKEND".to_string(), "turbovec".to_string());
+
+        let error = AppConfig::from_map(&values).expect_err("missing TurboVec path should fail");
+        assert_eq!(error, ConfigError::Missing("TURBOVEC_PATH"));
+
+        let mut chroma_values = fixture();
+        chroma_values.insert("VECTOR_STORE_BACKEND".to_string(), "chroma".to_string());
+        let config = AppConfig::from_map(&chroma_values).expect("Chroma should not need TurboVec");
+        assert_eq!(config.vector_store_backend, VectorStoreBackend::Chroma);
+    }
+
+    #[test]
+    fn rejects_invalid_turbovec_bit_width() {
+        let mut values = fixture();
+        values.insert("VECTOR_STORE_BACKEND".to_string(), "turbovec".to_string());
+        values.insert(
+            "TURBOVEC_PATH".to_string(),
+            "/tmp/chum-turbovec".to_string(),
+        );
+        values.insert("TURBOVEC_BIT_WIDTH".to_string(), "8".to_string());
+
+        let error = AppConfig::from_map(&values).expect_err("invalid bit width should fail");
+        assert_eq!(
+            error,
+            ConfigError::Invalid {
+                key: "TURBOVEC_BIT_WIDTH",
+                value: "8".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn ignores_turbovec_bit_width_when_chroma_backend_selected() {
+        let mut values = fixture();
+        values.insert("VECTOR_STORE_BACKEND".to_string(), "chroma".to_string());
+        values.insert("TURBOVEC_BIT_WIDTH".to_string(), "8".to_string());
+
+        let config = AppConfig::from_map(&values).expect("Chroma rollback should ignore TurboVec");
+        assert_eq!(config.vector_store_backend, VectorStoreBackend::Chroma);
+        assert_eq!(config.turbovec_bit_width, 4);
     }
 
     #[test]

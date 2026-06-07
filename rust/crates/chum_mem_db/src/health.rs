@@ -81,51 +81,57 @@ pub async fn check_readiness(
         },
     };
 
-    let chroma = match &config.chroma_url {
-        Some(base_url) => {
-            let client = reqwest::Client::builder()
-                .timeout(config.readiness_timeout())
-                .build()
-                .map_err(crate::DbError::from)?;
-            let heartbeat_url = base_url
-                .join("/api/v1/heartbeat")
-                .unwrap_or_else(|_| base_url.clone());
+    let chroma = if config.chroma_enabled() {
+        match &config.chroma_url {
+            Some(base_url) => {
+                let client = reqwest::Client::builder()
+                    .timeout(config.readiness_timeout())
+                    .build()
+                    .map_err(crate::DbError::from)?;
+                let heartbeat_url = base_url
+                    .join("/api/v1/heartbeat")
+                    .unwrap_or_else(|_| base_url.clone());
 
-            let readiness = match client.get(heartbeat_url).send().await {
-                Ok(response) if response.status().is_success() => DependencyReadiness {
-                    healthy: true,
-                    detail: "heartbeat ok".to_string(),
-                },
-                Ok(response)
-                    if matches!(
-                        response.status(),
-                        StatusCode::NOT_FOUND | StatusCode::GONE | StatusCode::METHOD_NOT_ALLOWED
-                    ) =>
-                {
-                    DependencyReadiness {
+                let readiness = match client.get(heartbeat_url).send().await {
+                    Ok(response) if response.status().is_success() => DependencyReadiness {
                         healthy: true,
-                        detail: format!(
-                            "service reachable; heartbeat endpoint returned {}",
-                            response.status()
-                        ),
+                        detail: "heartbeat ok".to_string(),
+                    },
+                    Ok(response)
+                        if matches!(
+                            response.status(),
+                            StatusCode::NOT_FOUND
+                                | StatusCode::GONE
+                                | StatusCode::METHOD_NOT_ALLOWED
+                        ) =>
+                    {
+                        DependencyReadiness {
+                            healthy: true,
+                            detail: format!(
+                                "service reachable; heartbeat endpoint returned {}",
+                                response.status()
+                            ),
+                        }
                     }
-                }
-                Ok(response) => DependencyReadiness {
-                    healthy: false,
-                    detail: format!("unexpected status {}", response.status()),
-                },
-                Err(error) => {
-                    warn!(error = %error, "chroma readiness probe failed");
-                    DependencyReadiness {
+                    Ok(response) => DependencyReadiness {
                         healthy: false,
-                        detail: error.to_string(),
+                        detail: format!("unexpected status {}", response.status()),
+                    },
+                    Err(error) => {
+                        warn!(error = %error, "chroma readiness probe failed");
+                        DependencyReadiness {
+                            healthy: false,
+                            detail: error.to_string(),
+                        }
                     }
-                }
-            };
+                };
 
-            Some(readiness)
+                Some(readiness)
+            }
+            None => None,
         }
-        None => None,
+    } else {
+        None
     };
 
     Ok(ReadinessReport { database, chroma })

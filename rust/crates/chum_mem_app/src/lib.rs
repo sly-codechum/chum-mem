@@ -94,7 +94,7 @@ pub fn build_health_response(
         uptime_seconds,
         config: HealthConfigSummary {
             database_url_present: !config.database_url.is_empty(),
-            chroma_enabled: config.chroma_enabled(),
+            chroma_enabled: config.vector_store_enabled(),
             project_scoped: config.project_id.is_some(),
             actor_type: config.actor_type,
             worker_poll_interval_ms: config.worker_poll_interval_ms,

@@ -17,6 +17,7 @@ fi
 
 postgres_archive="${backup_dir}/postgres_data.tar.gz"
 chroma_archive="${backup_dir}/chroma_data.tar.gz"
+turbovec_archive="${backup_dir}/turbovec_data.tar.gz"
 if [[ ! -f "$postgres_archive" || ! -f "$chroma_archive" ]]; then
   echo "Backup directory must contain postgres_data.tar.gz and chroma_data.tar.gz"
   exit 1
@@ -30,6 +31,7 @@ fi
 
 postgres_volume="${POSTGRES_VOLUME:-${project_name}_postgres_data}"
 chroma_volume="${CHROMA_VOLUME:-${project_name}_chroma_data}"
+turbovec_volume="${TURBOVEC_VOLUME:-${project_name}_turbovec_data}"
 
 restore_volume() {
   local volume_name="$1"
@@ -47,5 +49,8 @@ restore_volume() {
 
 restore_volume "$postgres_volume" "$postgres_archive"
 restore_volume "$chroma_volume" "$chroma_archive"
+if [[ -f "$turbovec_archive" ]]; then
+  restore_volume "$turbovec_volume" "$turbovec_archive"
+fi
 
 echo "Restore complete."

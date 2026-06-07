@@ -1,3 +1,31 @@
+x-rust-env: &rust-env
+  DATABASE_URL: ${DATABASE_URL:-postgres://chum_mem:chum_mem@postgres:5432/chum_mem}
+  DB_MIN_CONNECTIONS: ${DB_MIN_CONNECTIONS:-1}
+  DB_MAX_CONNECTIONS: ${DB_MAX_CONNECTIONS:-25}
+  DB_CONNECT_TIMEOUT_SECS: ${DB_CONNECT_TIMEOUT_SECS:-15}
+  DB_ACQUIRE_TIMEOUT_SECS: ${DB_ACQUIRE_TIMEOUT_SECS:-15}
+  RUN_DB_MIGRATIONS: ${RUN_DB_MIGRATIONS:-true}
+  READINESS_TIMEOUT_MS: ${READINESS_TIMEOUT_MS:-5000}
+  MCP_HOST: ${MCP_HOST:-0.0.0.0}
+  MCP_PORT: ${MCP_PORT:-63001}
+  VECTOR_STORE_BACKEND: ${VECTOR_STORE_BACKEND:-turbovec}
+  CHROMA_COLLECTION: ${CHROMA_COLLECTION:-memories}
+  TURBOVEC_PATH: ${TURBOVEC_PATH:-/data/turbovec}
+  TURBOVEC_BIT_WIDTH: ${TURBOVEC_BIT_WIDTH:-4}
+  CHUM_MEM_ORGANIZATION_ID: ${CHUM_MEM_ORGANIZATION_ID:-00000000-0000-0000-0000-000000000001}
+  CHUM_MEM_TEAM_ID: ${CHUM_MEM_TEAM_ID:-00000000-0000-0000-0000-000000000002}
+  CHUM_MEM_USER_ID: ${CHUM_MEM_USER_ID:-00000000-0000-0000-0000-000000000004}
+  CHUM_MEM_ACTOR_TYPE: ${CHUM_MEM_ACTOR_TYPE:-system}
+  CHUM_MEM_TEAM_ROLE: ${CHUM_MEM_TEAM_ROLE:-admin}
+  WORKER_POLL_INTERVAL_MS: ${WORKER_POLL_INTERVAL_MS:-5000}
+  # TurboVec persists typed partitions as local files. Keep worker writes serial by
+  # default so bulk reindexes do not contend on partition lock files.
+  WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-1}
+  KNOWLEDGE_GRAPH_MAX_CLUSTER_NODES: ${KNOWLEDGE_GRAPH_MAX_CLUSTER_NODES:-100000}
+  KNOWLEDGE_GRAPH_MAX_CLUSTER_EDGES: ${KNOWLEDGE_GRAPH_MAX_CLUSTER_EDGES:-200000}
+  DASHBOARD_API_URL: ${DASHBOARD_API_URL:-http://api:63001}
+  WEB_PORT: ${WEB_PORT:-63000}
+
 services:
   postgres:
     image: pgvector/pgvector:pg18
@@ -13,7 +41,7 @@ services:
     shm_size: "1g"
     command:
       - "postgres"
-      # ── Memory (budget: fits in ~4GB Docker VM with headroom for api/worker/chroma) ──
+      # ── Memory (budget: fits in ~4GB Docker VM with headroom for api/worker) ──
       - "-c"
       - "shared_buffers=512MB"
       - "-c"
@@ -74,45 +102,18 @@ services:
       timeout: 5s
       retries: 20
 
-  chroma:
-    image: chromadb/chroma:1.5.3
-    volumes:
-      - chroma_data:/data
-    ports:
-      - "60008:8000"
-
   api:
     build:
       context: .
       dockerfile: Dockerfile.rust
       target: rust-api
     environment:
-      DATABASE_URL: ${DATABASE_URL:-postgres://chum_mem:chum_mem@postgres:5432/chum_mem}
-      DB_MIN_CONNECTIONS: ${DB_MIN_CONNECTIONS:-1}
-      DB_MAX_CONNECTIONS: ${DB_MAX_CONNECTIONS:-25}
-      DB_CONNECT_TIMEOUT_SECS: ${DB_CONNECT_TIMEOUT_SECS:-15}
-      DB_ACQUIRE_TIMEOUT_SECS: ${DB_ACQUIRE_TIMEOUT_SECS:-15}
-      RUN_DB_MIGRATIONS: ${RUN_DB_MIGRATIONS:-true}
-      READINESS_TIMEOUT_MS: ${READINESS_TIMEOUT_MS:-5000}
-      MCP_HOST: ${MCP_HOST:-0.0.0.0}
-      MCP_PORT: ${MCP_PORT:-63001}
-      CHROMA_URL: ${CHROMA_URL:-http://chroma:8000}
-      CHROMA_COLLECTION: ${CHROMA_COLLECTION:-memories}
-      CHUM_MEM_ORGANIZATION_ID: ${CHUM_MEM_ORGANIZATION_ID:-00000000-0000-0000-0000-000000000001}
-      CHUM_MEM_TEAM_ID: ${CHUM_MEM_TEAM_ID:-00000000-0000-0000-0000-000000000002}
-      CHUM_MEM_USER_ID: ${CHUM_MEM_USER_ID:-00000000-0000-0000-0000-000000000004}
-      CHUM_MEM_ACTOR_TYPE: ${CHUM_MEM_ACTOR_TYPE:-system}
-      CHUM_MEM_TEAM_ROLE: ${CHUM_MEM_TEAM_ROLE:-admin}
-      KNOWLEDGE_GRAPH_MAX_CLUSTER_NODES: ${KNOWLEDGE_GRAPH_MAX_CLUSTER_NODES:-100000}
-      KNOWLEDGE_GRAPH_MAX_CLUSTER_EDGES: ${KNOWLEDGE_GRAPH_MAX_CLUSTER_EDGES:-200000}
-      WORKER_POLL_INTERVAL_MS: ${WORKER_POLL_INTERVAL_MS:-5000}
-      DASHBOARD_API_URL: ${DASHBOARD_API_URL:-http://api:63001}
-      WEB_PORT: ${WEB_PORT:-63000}
+      <<: *rust-env
     depends_on:
       postgres:
         condition: service_healthy
-      chroma:
-        condition: service_started
+    volumes:
+      - turbovec_data:${TURBOVEC_PATH:-/data/turbovec}
     ports:
       - "63001:63001"
     healthcheck:
@@ -127,32 +128,12 @@ services:
       dockerfile: Dockerfile.rust
       target: rust-worker
     environment:
-      DATABASE_URL: ${DATABASE_URL:-postgres://chum_mem:chum_mem@postgres:5432/chum_mem}
-      DB_MIN_CONNECTIONS: ${DB_MIN_CONNECTIONS:-1}
-      DB_MAX_CONNECTIONS: ${DB_MAX_CONNECTIONS:-25}
-      DB_CONNECT_TIMEOUT_SECS: ${DB_CONNECT_TIMEOUT_SECS:-15}
-      DB_ACQUIRE_TIMEOUT_SECS: ${DB_ACQUIRE_TIMEOUT_SECS:-15}
-      RUN_DB_MIGRATIONS: ${RUN_DB_MIGRATIONS:-true}
-      READINESS_TIMEOUT_MS: ${READINESS_TIMEOUT_MS:-5000}
-      MCP_HOST: ${MCP_HOST:-0.0.0.0}
-      MCP_PORT: ${MCP_PORT:-63001}
-      CHROMA_URL: ${CHROMA_URL:-http://chroma:8000}
-      CHROMA_COLLECTION: ${CHROMA_COLLECTION:-memories}
-      CHUM_MEM_ORGANIZATION_ID: ${CHUM_MEM_ORGANIZATION_ID:-00000000-0000-0000-0000-000000000001}
-      CHUM_MEM_TEAM_ID: ${CHUM_MEM_TEAM_ID:-00000000-0000-0000-0000-000000000002}
-      CHUM_MEM_USER_ID: ${CHUM_MEM_USER_ID:-00000000-0000-0000-0000-000000000004}
-      CHUM_MEM_ACTOR_TYPE: ${CHUM_MEM_ACTOR_TYPE:-system}
-      CHUM_MEM_TEAM_ROLE: ${CHUM_MEM_TEAM_ROLE:-admin}
-      WORKER_POLL_INTERVAL_MS: ${WORKER_POLL_INTERVAL_MS:-5000}
-      KNOWLEDGE_GRAPH_MAX_CLUSTER_NODES: ${KNOWLEDGE_GRAPH_MAX_CLUSTER_NODES:-100000}
-      KNOWLEDGE_GRAPH_MAX_CLUSTER_EDGES: ${KNOWLEDGE_GRAPH_MAX_CLUSTER_EDGES:-200000}
-      DASHBOARD_API_URL: ${DASHBOARD_API_URL:-http://api:63001}
-      WEB_PORT: ${WEB_PORT:-63000}
+      <<: *rust-env
     depends_on:
       postgres:
         condition: service_healthy
-      chroma:
-        condition: service_started
+    volumes:
+      - turbovec_data:${TURBOVEC_PATH:-/data/turbovec}
 
   web:
     build:
@@ -176,4 +157,4 @@ services:
 
 volumes:
   postgres_data:
-  chroma_data:
+  turbovec_data:

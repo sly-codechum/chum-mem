@@ -15,7 +15,7 @@ use chum_mem_app::{
     ErrorBody, HealthResponse, ReadyResponse, ServiceMetadata, build_health_response, init_tracing,
     shutdown_signal,
 };
-use chum_mem_config::{AppConfig, ServiceKind};
+use chum_mem_config::{AppConfig, ServiceKind, VectorStoreBackend};
 use chum_mem_contracts::{
     AppendSessionEventRequest, AppendSessionEventResponse, AuthorityClass,
     BatchAppendSessionEventsRequest, BatchAppendSessionEventsResponse, BulkIndexResponse,
@@ -45,12 +45,13 @@ use chum_mem_db::{
 use chum_mem_pipeline::{
     CHROMA_EMBEDDING_DIMENSIONS, ChromaQueryResult, GraphProjection, GraphQueryResponse,
     KnowledgeGraph, KnowledgeNode, MemorySearchEnvelope, RankedMemory, RankingContext,
-    RepositoryFilePayload, SearchMetrics, SessionEventRecord, build_context_pack,
-    build_session_completion_job_plan, community_relevance_from_query, compile_minimal_proof_set,
-    derive_memories_from_session, derive_session_episodes, embed_text, event_text,
-    generate_knowledge_report, memory_community_map, merge_graphs, merge_hybrid_results,
-    progressive_disclosure, project_graph_for_dashboard, query_chroma_memories_typed,
-    rank_hybrid_results, run_knowledge_query, score_session_relationship, to_node_link_json,
+    RepositoryFilePayload, SearchMetrics, SessionEventRecord, TurboVecScope, TurboVecStore,
+    VectorSearchResult, build_context_pack, build_session_completion_job_plan,
+    community_relevance_from_query, compile_minimal_proof_set, derive_memories_from_session,
+    derive_session_episodes, embed_text, event_text, generate_knowledge_report,
+    memory_community_map, merge_graphs, merge_hybrid_results, progressive_disclosure,
+    project_graph_for_dashboard, query_chroma_memories_typed, rank_hybrid_results,
+    run_knowledge_query, score_session_relationship, to_node_link_json, vector_from_f64,
 };
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
@@ -555,7 +556,7 @@ fn mcp_tool_definitions() -> Vec<Value> {
         json!({"name":"session_event_append","description":"Append a normalized provider event to a session","inputSchema":{"type":"object","properties":{"sessionId":{"type":"string","format":"uuid"},"eventId":{"type":"string"},"idempotencyKey":{"type":"string"},"provider":{"type":"string","minLength":1,"maxLength":64,"description":"Open AI client identifier."},"eventType":{"type":"string","enum":["prompt","response","tool_call","tool_result","file_change","command","test_result","summary","error","annotation","reasoning","turn_context","agent_message"]},"eventTime":{"type":"string","format":"date-time"},"payload":{"type":"object"},"rawPayload":{"type":"object"},"turnId":{"type":"string","description":"Optional turn-graph identifier clustering events from one model step."}},"required":["sessionId","eventId","idempotencyKey","provider","eventType","eventTime","payload","rawPayload"]}}),
         json!({"name":"session_end","description":"End a session and derive searchable memories with provenance","inputSchema":{"type":"object","properties":{"sessionId":{"type":"string","format":"uuid"},"summary":{"type":"string"},"metadata":{"type":"object"}},"required":["sessionId"]}}),
         json!({"name":"repository_sync","description":"Incremental repository sync — accepts pre-read text contents or base64 binary payloads and removed paths, parses in-memory, merges into existing graph snapshot. Preferred over project_import; the plugin hook invokes this automatically.","inputSchema":{"type":"object","properties":{"projectId":{"type":"string","format":"uuid"},"files":{"type":"array","items":{"type":"object","properties":{"path":{"type":"string"},"hash":{"type":"string"},"content":{"type":"string"},"bytesBase64":{"type":"string"},"mediaType":{"type":"string"},"sizeBytes":{"type":"integer","minimum":0}},"required":["path","hash"]}},"removedPaths":{"type":"array","items":{"type":"string"}},"manifest":{"type":"object","additionalProperties":{"type":"string"}},"mergeWithExisting":{"type":"boolean"}},"required":["files"]}}),
-        json!({"name":"health_check","description":"Verify that PostgreSQL and optional Chroma dependencies are reachable","inputSchema":{"type":"object","properties":{}}}),
+        json!({"name":"health_check","description":"Verify that PostgreSQL and optional vector store dependencies are reachable","inputSchema":{"type":"object","properties":{}}}),
         json!({"name":"mem_search","description":"Natural language memory retrieval with progressive disclosure","inputSchema":{"type":"object","properties":{"query":{"type":"string"},"projectId":{"type":"string","format":"uuid"},"sessionId":{"type":"string","format":"uuid"},"provider":{"type":"string","minLength":1,"maxLength":64,"description":"Optional open AI client identifier filter."},"branch":{"type":"string"},"types":{"type":"array","items":{"type":"string"}},"tags":{"type":"array","items":{"type":"string"}},"from":{"type":"string","format":"date-time"},"to":{"type":"string","format":"date-time"},"mode":{"type":"string","enum":["lexical","semantic","hybrid"]},"disclosureLevel":{"type":"string","enum":["overview","related","full"]},"includeHistorical":{"type":"boolean"},"limit":{"type":"integer","minimum":1,"maximum":50},"cursor":{"type":"string"}},"required":["query"]}}),
         json!({"name":"context_build","description":"Build a compact context pack from hybrid retrieval results","inputSchema":{"type":"object","properties":{"provider":{"type":"string","minLength":1,"maxLength":64,"description":"Open AI client identifier for the requesting client."},"objective":{"type":"string"},"retrievalIntent":{"type":"string","enum":["none","memory_only","repository_only","session_graph_only","hybrid"]},"projectId":{"type":"string","format":"uuid"},"branch":{"type":"string"},"filePaths":{"type":"array","items":{"type":"string"}},"includeHistorical":{"type":"boolean"},"maxTokenBudget":{"type":"integer","minimum":1,"maximum":64000}},"required":["provider","objective","maxTokenBudget"]}}),
         json!({"name":"context_compile_v2","description":"Compile the smallest proof set whose claims cover the objective's sub-goals. v2.2.1 replacement for context_build: hard-ceiling token budget, surfaces uncovered sub-goals as proof_gap markers in unknowns instead of silently truncating. See docs/research/v2.2.1-pckc/DESIGN.md §4.","inputSchema":{"type":"object","properties":{"provider":{"type":"string","minLength":1,"maxLength":64,"description":"Open AI client identifier for the requesting client."},"objective":{"type":"string"},"retrievalIntent":{"type":"string","enum":["none","memory_only","repository_only","session_graph_only","hybrid"]},"projectId":{"type":"string","format":"uuid"},"branch":{"type":"string"},"filePaths":{"type":"array","items":{"type":"string"}},"includeHistorical":{"type":"boolean"},"maxTokenBudget":{"type":"integer","minimum":1,"maximum":64000}},"required":["provider","objective","maxTokenBudget"]}}),
@@ -1461,7 +1462,7 @@ async fn perform_session_end(
         let job_plan = build_session_completion_job_plan(
             session.id,
             derived.unresolved_risk,
-            state.config.chroma_enabled(),
+            state.config.vector_store_enabled(),
             true,
         );
         let mut jobs = Vec::new();
@@ -1560,6 +1561,8 @@ async fn perform_search(
         .collect::<Vec<_>>();
     let semantic_hits = if input.mode == chum_mem_contracts::SearchMode::Lexical {
         Vec::new()
+    } else if state.config.vector_store_backend == VectorStoreBackend::TurboVec {
+        Vec::new()
     } else {
         semantic_search(&mut tx, &state.scope, &input, provider.as_deref()).await?
     };
@@ -1624,57 +1627,62 @@ async fn perform_search(
         ranking_context.session_graph_weights = weights.into_iter().collect();
     }
 
-    // v2.2.2: Always query Chroma as a primary source (not fallback-only).
-    // Chroma uses real ML embeddings (all-MiniLM-L6-v2) for semantic search,
-    // complementing the pgvector hash-based ANN and PostgreSQL lexical search.
-    let mut chroma_semantic: Vec<chum_mem_pipeline::SemanticQueryResult> = Vec::new();
-    let mut chroma_ranked_hits: Vec<RankedMemory> = Vec::new();
+    // v2.2.2+: Always query the configured secondary vector store as a
+    // primary source (not fallback-only). Chroma remains the default backend;
+    // TurboVec can be enabled as an adapter without changing mem_search output.
+    let mut vector_store_semantic: Vec<chum_mem_pipeline::SemanticQueryResult> = Vec::new();
+    let mut vector_store_ranked_hits: Vec<RankedMemory> = Vec::new();
     if input.mode != chum_mem_contracts::SearchMode::Lexical {
-        if let Some(chroma_url) = state.config.chroma_url.as_ref().map(|value| value.as_str()) {
-            let typed_filter: Vec<String> = input
-                .types
-                .iter()
-                .map(|t| memory_type_str(*t).to_string())
-                .collect();
-            if let Ok(chroma) = query_chroma_memories_typed(
-                &state.http_client,
-                chroma_url,
-                &state.config.chroma_collection,
-                &input.query,
-                &typed_filter,
-                input.limit as usize,
-            )
-            .await
-            {
+        let typed_filter: Vec<String> = input
+            .types
+            .iter()
+            .map(|t| memory_type_str(*t).to_string())
+            .collect();
+        if let Ok(vector_hits) = query_configured_vector_store(
+            &state,
+            &input.query,
+            &typed_filter,
+            input.limit as usize,
+            input.project_id.or(state.scope.project_id),
+        )
+        .await
+        {
+            if !vector_hits.is_empty() {
                 let existing_ids: HashSet<Uuid> = lexical_hits
                     .iter()
                     .map(|h| h.id)
                     .chain(semantic_hits.iter().map(|h| h.id))
                     .collect();
-                let chroma_only_ids: Vec<Uuid> = chroma
+                let vector_only_ids: Vec<Uuid> = vector_hits
                     .iter()
                     .map(|hit| hit.id)
                     .filter(|id| !existing_ids.contains(id))
                     .collect();
-                if !chroma_only_ids.is_empty() {
-                    if let Ok(chroma_memories) =
-                        load_memories_batch(&mut tx, &state.scope, &chroma_only_ids).await
+                let mut visible_vector_ids = existing_ids;
+                if !vector_only_ids.is_empty() {
+                    if let Ok(vector_memories) =
+                        load_memories_batch(&mut tx, &state.scope, &vector_only_ids).await
                     {
-                        chroma_ranked_hits = chroma_memories
+                        visible_vector_ids.extend(vector_memories.iter().map(|memory| memory.id));
+                        vector_store_ranked_hits = vector_memories
                             .iter()
                             .map(map_memory_detail_to_ranked_memory)
                             .collect();
                     }
                 }
-                chroma_semantic = chroma.iter().map(chroma_to_semantic_query_result).collect();
+                vector_store_semantic = vector_hits
+                    .iter()
+                    .filter(|hit| visible_vector_ids.contains(&hit.id))
+                    .map(vector_to_semantic_query_result)
+                    .collect();
             }
         }
     }
 
-    // Merge all three sources: lexical + pgvector semantic + Chroma ML semantic
-    let total_semantic_count = semantic_hits.len() + chroma_semantic.len();
-    let all_lexical = [lexical_hits, chroma_ranked_hits].concat();
-    let all_semantic = [semantic_hits, chroma_semantic].concat();
+    // Merge all sources: lexical + pgvector semantic + configured vector store.
+    let total_semantic_count = semantic_hits.len() + vector_store_semantic.len();
+    let all_lexical = [lexical_hits, vector_store_ranked_hits].concat();
+    let all_semantic = [semantic_hits, vector_store_semantic].concat();
     let merged = merge_hybrid_results(&all_lexical, &all_semantic, &ranking_context);
 
     let mut ranked = rank_hybrid_results(&merged, &ranking_context);
@@ -4216,8 +4224,61 @@ fn truncate_text(value: &str, max_chars: usize) -> String {
     format!("{truncated}…")
 }
 
-fn chroma_to_semantic_query_result(
-    hit: &ChromaQueryResult,
+async fn query_configured_vector_store(
+    state: &ApiState,
+    query: &str,
+    typed_filter: &[String],
+    limit: usize,
+    project_id: Option<Uuid>,
+) -> Result<Vec<VectorSearchResult>, chum_mem_pipeline::VectorStoreError> {
+    match state.config.vector_store_backend {
+        VectorStoreBackend::Chroma => {
+            let Some(chroma_url) = state.config.chroma_url.as_ref().map(|value| value.as_str())
+            else {
+                return Ok(Vec::new());
+            };
+            let hits = query_chroma_memories_typed(
+                &state.http_client,
+                chroma_url,
+                &state.config.chroma_collection,
+                query,
+                typed_filter,
+                limit,
+            )
+            .await?;
+            Ok(hits.iter().map(chroma_to_vector_search_result).collect())
+        }
+        VectorStoreBackend::TurboVec => {
+            let Some(root) = state.config.turbovec_path.as_ref() else {
+                return Ok(Vec::new());
+            };
+            let query_vector = vector_from_f64(&embed_text(query))?;
+            let store = TurboVecStore::new(
+                root,
+                &state.config.chroma_collection,
+                state.config.turbovec_bit_width,
+            );
+            let scope = TurboVecScope {
+                project_id,
+                user_id: None,
+                namespace: None,
+            };
+            store.search_typed_scoped(&query_vector, typed_filter, limit, &scope)
+        }
+    }
+}
+
+fn chroma_to_vector_search_result(hit: &ChromaQueryResult) -> VectorSearchResult {
+    VectorSearchResult {
+        id: hit.id,
+        distance: hit.distance,
+        document: hit.document.clone(),
+        metadata: hit.metadata.clone(),
+    }
+}
+
+fn vector_to_semantic_query_result(
+    hit: &VectorSearchResult,
 ) -> chum_mem_pipeline::SemanticQueryResult {
     chum_mem_pipeline::SemanticQueryResult {
         id: hit.id,
