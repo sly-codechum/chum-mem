@@ -15,7 +15,7 @@ use chum_mem_app::{
     ErrorBody, HealthResponse, ReadyResponse, ServiceMetadata, build_health_response, init_tracing,
     shutdown_signal,
 };
-use chum_mem_config::{AppConfig, ServiceKind};
+use chum_mem_config::{AppConfig, ServiceKind, VectorStoreBackend};
 use chum_mem_contracts::{
     AppendSessionEventRequest, AppendSessionEventResponse, AuthorityClass,
     BatchAppendSessionEventsRequest, BatchAppendSessionEventsResponse, BulkIndexResponse,
@@ -44,13 +44,14 @@ use chum_mem_db::{
 };
 use chum_mem_pipeline::{
     CHROMA_EMBEDDING_DIMENSIONS, ChromaQueryResult, GraphProjection, GraphQueryResponse,
-    KnowledgeGraph, MemorySearchEnvelope, RankedMemory, RankingContext, RepositoryFilePayload,
-    SearchMetrics, SessionEventRecord, build_context_pack, build_session_completion_job_plan,
+    KnowledgeGraph, KnowledgeNode, MemorySearchEnvelope, RankedMemory, RankingContext,
+    RepositoryFilePayload, SearchMetrics, SessionEventRecord, TurboVecScope, TurboVecStore,
+    VectorSearchResult, build_context_pack, build_session_completion_job_plan,
     community_relevance_from_query, compile_minimal_proof_set, derive_memories_from_session,
     derive_session_episodes, embed_text, event_text, generate_knowledge_report,
     memory_community_map, merge_graphs, merge_hybrid_results, progressive_disclosure,
-    query_chroma_memories_typed, rank_hybrid_results, run_knowledge_query,
-    score_session_relationship, to_node_link_json,
+    project_graph_for_dashboard, query_chroma_memories_typed, rank_hybrid_results,
+    run_knowledge_query, score_session_relationship, to_node_link_json, vector_from_f64,
 };
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
@@ -89,10 +90,17 @@ const API_ROUTES: &[&str] = &[
     "GET /mcp",
     "DELETE /mcp",
 ];
+const DASHBOARD_GLOBAL_GRAPH_DEFAULT_MAX_NODES: usize = 1_200;
+const DASHBOARD_GLOBAL_GRAPH_DEFAULT_MAX_EDGES: usize = 12_000;
+const DASHBOARD_GRAPH_HARD_MAX_NODES: usize = 40_000;
+const DASHBOARD_GRAPH_HARD_MAX_EDGES: usize = 400_000;
 
 const SEARCH_PROVENANCE_LIMIT_DEFAULT: i64 = 2;
 const CONTEXT_BUILD_SEARCH_LIMIT: u32 = 12;
 const GLOBAL_PROJECT_SLUG: &str = "global";
+const UNIFIED_REPORT_COMMUNITY_LIMIT: usize = 8;
+const UNIFIED_REPORT_NODE_REF_LIMIT: usize = 4;
+const UNIFIED_REPORT_HUB_LIMIT: usize = 8;
 
 /// Cached community data extracted from the session knowledge graph.
 /// Scoped by project_id to prevent cross-project contamination.
@@ -171,6 +179,8 @@ impl IntoResponse for ApiError {
 struct ProjectScopedQuery {
     project_id: Option<Uuid>,
     layer: Option<String>,
+    max_nodes: Option<usize>,
+    max_edges: Option<usize>,
 }
 
 #[derive(Debug, Serialize)]
@@ -471,9 +481,15 @@ async fn dashboard_graph(
     State(state): State<ApiState>,
     Query(query): Query<ProjectScopedQuery>,
 ) -> Result<Response, ApiError> {
-    let response = perform_dashboard_graph(&state, query.project_id, query.layer.as_deref())
-        .await
-        .map_err(map_domain_error)?;
+    let response = perform_dashboard_graph(
+        &state,
+        query.project_id,
+        query.layer.as_deref(),
+        query.max_nodes,
+        query.max_edges,
+    )
+    .await
+    .map_err(map_domain_error)?;
     Ok((StatusCode::OK, Json(response)).into_response())
 }
 
@@ -540,13 +556,13 @@ fn mcp_tool_definitions() -> Vec<Value> {
         json!({"name":"session_event_append","description":"Append a normalized provider event to a session","inputSchema":{"type":"object","properties":{"sessionId":{"type":"string","format":"uuid"},"eventId":{"type":"string"},"idempotencyKey":{"type":"string"},"provider":{"type":"string","minLength":1,"maxLength":64,"description":"Open AI client identifier."},"eventType":{"type":"string","enum":["prompt","response","tool_call","tool_result","file_change","command","test_result","summary","error","annotation","reasoning","turn_context","agent_message"]},"eventTime":{"type":"string","format":"date-time"},"payload":{"type":"object"},"rawPayload":{"type":"object"},"turnId":{"type":"string","description":"Optional turn-graph identifier clustering events from one model step."}},"required":["sessionId","eventId","idempotencyKey","provider","eventType","eventTime","payload","rawPayload"]}}),
         json!({"name":"session_end","description":"End a session and derive searchable memories with provenance","inputSchema":{"type":"object","properties":{"sessionId":{"type":"string","format":"uuid"},"summary":{"type":"string"},"metadata":{"type":"object"}},"required":["sessionId"]}}),
         json!({"name":"repository_sync","description":"Incremental repository sync — accepts pre-read text contents or base64 binary payloads and removed paths, parses in-memory, merges into existing graph snapshot. Preferred over project_import; the plugin hook invokes this automatically.","inputSchema":{"type":"object","properties":{"projectId":{"type":"string","format":"uuid"},"files":{"type":"array","items":{"type":"object","properties":{"path":{"type":"string"},"hash":{"type":"string"},"content":{"type":"string"},"bytesBase64":{"type":"string"},"mediaType":{"type":"string"},"sizeBytes":{"type":"integer","minimum":0}},"required":["path","hash"]}},"removedPaths":{"type":"array","items":{"type":"string"}},"manifest":{"type":"object","additionalProperties":{"type":"string"}},"mergeWithExisting":{"type":"boolean"}},"required":["files"]}}),
-        json!({"name":"health_check","description":"Verify that PostgreSQL and optional Chroma dependencies are reachable","inputSchema":{"type":"object","properties":{}}}),
+        json!({"name":"health_check","description":"Verify that PostgreSQL and optional vector store dependencies are reachable","inputSchema":{"type":"object","properties":{}}}),
         json!({"name":"mem_search","description":"Natural language memory retrieval with progressive disclosure","inputSchema":{"type":"object","properties":{"query":{"type":"string"},"projectId":{"type":"string","format":"uuid"},"sessionId":{"type":"string","format":"uuid"},"provider":{"type":"string","minLength":1,"maxLength":64,"description":"Optional open AI client identifier filter."},"branch":{"type":"string"},"types":{"type":"array","items":{"type":"string"}},"tags":{"type":"array","items":{"type":"string"}},"from":{"type":"string","format":"date-time"},"to":{"type":"string","format":"date-time"},"mode":{"type":"string","enum":["lexical","semantic","hybrid"]},"disclosureLevel":{"type":"string","enum":["overview","related","full"]},"includeHistorical":{"type":"boolean"},"limit":{"type":"integer","minimum":1,"maximum":50},"cursor":{"type":"string"}},"required":["query"]}}),
         json!({"name":"context_build","description":"Build a compact context pack from hybrid retrieval results","inputSchema":{"type":"object","properties":{"provider":{"type":"string","minLength":1,"maxLength":64,"description":"Open AI client identifier for the requesting client."},"objective":{"type":"string"},"retrievalIntent":{"type":"string","enum":["none","memory_only","repository_only","session_graph_only","hybrid"]},"projectId":{"type":"string","format":"uuid"},"branch":{"type":"string"},"filePaths":{"type":"array","items":{"type":"string"}},"includeHistorical":{"type":"boolean"},"maxTokenBudget":{"type":"integer","minimum":1,"maximum":64000}},"required":["provider","objective","maxTokenBudget"]}}),
         json!({"name":"context_compile_v2","description":"Compile the smallest proof set whose claims cover the objective's sub-goals. v2.2.1 replacement for context_build: hard-ceiling token budget, surfaces uncovered sub-goals as proof_gap markers in unknowns instead of silently truncating. See docs/research/v2.2.1-pckc/DESIGN.md §4.","inputSchema":{"type":"object","properties":{"provider":{"type":"string","minLength":1,"maxLength":64,"description":"Open AI client identifier for the requesting client."},"objective":{"type":"string"},"retrievalIntent":{"type":"string","enum":["none","memory_only","repository_only","session_graph_only","hybrid"]},"projectId":{"type":"string","format":"uuid"},"branch":{"type":"string"},"filePaths":{"type":"array","items":{"type":"string"}},"includeHistorical":{"type":"boolean"},"maxTokenBudget":{"type":"integer","minimum":1,"maximum":64000}},"required":["provider","objective","maxTokenBudget"]}}),
         json!({"name":"graph_snapshot","description":"Return a knowledge graph snapshot of memory relationships","inputSchema":{"type":"object","properties":{}}}),
         json!({"name":"knowledge_graph_export","description":"Export the latest knowledge graph as machine-readable JSON","inputSchema":{"type":"object","properties":{"projectId":{"type":"string","format":"uuid"},"layer":{"type":"string","enum":["repository","session"],"description":"Graph layer: repository (code structure) or session (interaction history). Omit for latest of any type."}}}}),
-        json!({"name":"knowledge_report","description":"Generate a human-readable knowledge report from the latest graph snapshot","inputSchema":{"type":"object","properties":{"projectId":{"type":"string","format":"uuid"},"layer":{"type":"string","enum":["repository","session"],"description":"Graph layer: repository (code structure) or session (interaction history). Omit for latest of any type."}}}}),
+        json!({"name":"knowledge_report","description":"Generate a human-readable knowledge report from the latest graph snapshot","inputSchema":{"type":"object","properties":{"projectId":{"type":"string","format":"uuid"},"layer":{"type":"string","enum":["repository","session","unified"],"description":"Graph layer: repository (code structure), session (interaction history), or unified for a compact cross-layer report. Omit for latest of any type."}}}}),
         json!({"name":"knowledge_query","description":"Query hub nodes, shortest paths, neighbors, communities, search the graph, or run NeuroPath goal-directed path pruning","inputSchema":{"type":"object","properties":{"projectId":{"type":"string","format":"uuid"},"query":{"type":"string","enum":["hub_nodes","shortest_path","neighbors","communities","search","goal_directed"]},"nodeId":{"type":"string"},"targetNodeId":{"type":"string"},"text":{"type":"string"},"depth":{"type":"integer","minimum":1,"maximum":5},"layer":{"type":"string","enum":["repository","session"],"description":"Graph layer: repository (code structure) or session (interaction history). Omit for latest of any type."}},"required":["query"]}}),
         json!({"name":"knowledge_communities","description":"List detected graph communities and cohesion scores","inputSchema":{"type":"object","properties":{"projectId":{"type":"string","format":"uuid"},"layer":{"type":"string","enum":["repository","session"],"description":"Graph layer to query."}}}}),
         json!({"name":"memory_get_batch","description":"Fetch multiple memory records by ID after mem_search filtering","inputSchema":{"type":"object","properties":{"ids":{"type":"array","items":{"type":"string","format":"uuid"},"minItems":1,"maxItems":20}},"required":["ids"]}}),
@@ -667,7 +683,7 @@ async fn handle_mcp_call(
             )
         }
         "graph_snapshot" => {
-            let result = perform_dashboard_graph(state, None, None)
+            let result = perform_dashboard_graph(state, None, None, None, None)
                 .await
                 .map_err(|e| format!("{e:?}"))?;
             Ok(
@@ -1446,7 +1462,7 @@ async fn perform_session_end(
         let job_plan = build_session_completion_job_plan(
             session.id,
             derived.unresolved_risk,
-            state.config.chroma_enabled(),
+            state.config.vector_store_enabled(),
             true,
         );
         let mut jobs = Vec::new();
@@ -1545,6 +1561,8 @@ async fn perform_search(
         .collect::<Vec<_>>();
     let semantic_hits = if input.mode == chum_mem_contracts::SearchMode::Lexical {
         Vec::new()
+    } else if state.config.vector_store_backend == VectorStoreBackend::TurboVec {
+        Vec::new()
     } else {
         semantic_search(&mut tx, &state.scope, &input, provider.as_deref()).await?
     };
@@ -1609,57 +1627,62 @@ async fn perform_search(
         ranking_context.session_graph_weights = weights.into_iter().collect();
     }
 
-    // v2.2.2: Always query Chroma as a primary source (not fallback-only).
-    // Chroma uses real ML embeddings (all-MiniLM-L6-v2) for semantic search,
-    // complementing the pgvector hash-based ANN and PostgreSQL lexical search.
-    let mut chroma_semantic: Vec<chum_mem_pipeline::SemanticQueryResult> = Vec::new();
-    let mut chroma_ranked_hits: Vec<RankedMemory> = Vec::new();
+    // v2.2.2+: Always query the configured secondary vector store as a
+    // primary source (not fallback-only). Chroma remains the default backend;
+    // TurboVec can be enabled as an adapter without changing mem_search output.
+    let mut vector_store_semantic: Vec<chum_mem_pipeline::SemanticQueryResult> = Vec::new();
+    let mut vector_store_ranked_hits: Vec<RankedMemory> = Vec::new();
     if input.mode != chum_mem_contracts::SearchMode::Lexical {
-        if let Some(chroma_url) = state.config.chroma_url.as_ref().map(|value| value.as_str()) {
-            let typed_filter: Vec<String> = input
-                .types
-                .iter()
-                .map(|t| memory_type_str(*t).to_string())
-                .collect();
-            if let Ok(chroma) = query_chroma_memories_typed(
-                &state.http_client,
-                chroma_url,
-                &state.config.chroma_collection,
-                &input.query,
-                &typed_filter,
-                input.limit as usize,
-            )
-            .await
-            {
+        let typed_filter: Vec<String> = input
+            .types
+            .iter()
+            .map(|t| memory_type_str(*t).to_string())
+            .collect();
+        if let Ok(vector_hits) = query_configured_vector_store(
+            &state,
+            &input.query,
+            &typed_filter,
+            input.limit as usize,
+            input.project_id.or(state.scope.project_id),
+        )
+        .await
+        {
+            if !vector_hits.is_empty() {
                 let existing_ids: HashSet<Uuid> = lexical_hits
                     .iter()
                     .map(|h| h.id)
                     .chain(semantic_hits.iter().map(|h| h.id))
                     .collect();
-                let chroma_only_ids: Vec<Uuid> = chroma
+                let vector_only_ids: Vec<Uuid> = vector_hits
                     .iter()
                     .map(|hit| hit.id)
                     .filter(|id| !existing_ids.contains(id))
                     .collect();
-                if !chroma_only_ids.is_empty() {
-                    if let Ok(chroma_memories) =
-                        load_memories_batch(&mut tx, &state.scope, &chroma_only_ids).await
+                let mut visible_vector_ids = existing_ids;
+                if !vector_only_ids.is_empty() {
+                    if let Ok(vector_memories) =
+                        load_memories_batch(&mut tx, &state.scope, &vector_only_ids).await
                     {
-                        chroma_ranked_hits = chroma_memories
+                        visible_vector_ids.extend(vector_memories.iter().map(|memory| memory.id));
+                        vector_store_ranked_hits = vector_memories
                             .iter()
                             .map(map_memory_detail_to_ranked_memory)
                             .collect();
                     }
                 }
-                chroma_semantic = chroma.iter().map(chroma_to_semantic_query_result).collect();
+                vector_store_semantic = vector_hits
+                    .iter()
+                    .filter(|hit| visible_vector_ids.contains(&hit.id))
+                    .map(vector_to_semantic_query_result)
+                    .collect();
             }
         }
     }
 
-    // Merge all three sources: lexical + pgvector semantic + Chroma ML semantic
-    let total_semantic_count = semantic_hits.len() + chroma_semantic.len();
-    let all_lexical = [lexical_hits, chroma_ranked_hits].concat();
-    let all_semantic = [semantic_hits, chroma_semantic].concat();
+    // Merge all sources: lexical + pgvector semantic + configured vector store.
+    let total_semantic_count = semantic_hits.len() + vector_store_semantic.len();
+    let all_lexical = [lexical_hits, vector_store_ranked_hits].concat();
+    let all_semantic = [semantic_hits, vector_store_semantic].concat();
     let merged = merge_hybrid_results(&all_lexical, &all_semantic, &ranking_context);
 
     let mut ranked = rank_hybrid_results(&merged, &ranking_context);
@@ -2178,9 +2201,101 @@ async fn perform_dashboard_graph(
     state: &ApiState,
     project_id: Option<Uuid>,
     layer: Option<&str>,
+    max_nodes: Option<usize>,
+    max_edges: Option<usize>,
 ) -> Result<DashboardGraphResponse, DomainError> {
     let context = scoped_context(&state.scope, project_id)?;
     let mut tx = begin_tx(state, &context).await?;
+    let limits = dashboard_graph_limits(project_id.is_none(), max_nodes, max_edges);
+
+    if project_id.is_none() {
+        let response = match layer {
+            Some("repository") => {
+                match load_projected_merged_snapshots_by_type(
+                    &mut tx,
+                    &context,
+                    "repository",
+                    limits.expect("global dashboard graph limits are always present"),
+                )
+                .await?
+                {
+                    Some((graph, total_nodes, total_edges)) => {
+                        map_dashboard_graph_with_projection_totals(graph, total_nodes, total_edges)
+                    }
+                    None => {
+                        let nodes = load_memory_graph_nodes(&mut tx, &context, i64::MAX).await?;
+                        let links = load_memory_graph_edges(&mut tx, &context, i64::MAX).await?;
+                        map_dashboard_graph_fallback(nodes, links, limits)
+                    }
+                }
+            }
+            Some("session") => {
+                match load_projected_merged_snapshots_by_type(
+                    &mut tx,
+                    &context,
+                    "session",
+                    limits.expect("global dashboard graph limits are always present"),
+                )
+                .await?
+                {
+                    Some((graph, total_nodes, total_edges)) => {
+                        map_dashboard_graph_with_projection_totals(graph, total_nodes, total_edges)
+                    }
+                    None => {
+                        let nodes = load_memory_graph_nodes(&mut tx, &context, i64::MAX).await?;
+                        let links = load_memory_graph_edges(&mut tx, &context, i64::MAX).await?;
+                        map_dashboard_graph_fallback(nodes, links, limits)
+                    }
+                }
+            }
+            _ => {
+                let (max_nodes, max_edges) =
+                    limits.expect("global dashboard graph limits are always present");
+                let repo_budget = ((max_nodes / 2).max(1), (max_edges / 2).max(1));
+                let session_budget = (
+                    max_nodes.saturating_sub(repo_budget.0).max(1),
+                    max_edges.saturating_sub(repo_budget.1).max(1),
+                );
+                let repo = load_projected_merged_snapshots_by_type(
+                    &mut tx,
+                    &context,
+                    "repository",
+                    repo_budget,
+                )
+                .await?;
+                let session = load_projected_merged_snapshots_by_type(
+                    &mut tx,
+                    &context,
+                    "session",
+                    session_budget,
+                )
+                .await?;
+
+                match (repo, session) {
+                    (
+                        Some((repo_graph, repo_nodes, repo_edges)),
+                        Some((session_graph, session_nodes, session_edges)),
+                    ) => map_dashboard_graph_with_projection_totals(
+                        merge_graphs(&repo_graph, &session_graph),
+                        repo_nodes + session_nodes,
+                        repo_edges + session_edges,
+                    ),
+                    (Some((graph, total_nodes, total_edges)), None)
+                    | (None, Some((graph, total_nodes, total_edges))) => {
+                        map_dashboard_graph_with_projection_totals(graph, total_nodes, total_edges)
+                    }
+                    (None, None) => {
+                        let nodes = load_memory_graph_nodes(&mut tx, &context, i64::MAX).await?;
+                        let links = load_memory_graph_edges(&mut tx, &context, i64::MAX).await?;
+                        map_dashboard_graph_fallback(nodes, links, limits)
+                    }
+                }
+            }
+        };
+        commit_tx(tx).await?;
+        return Ok(response);
+    }
+
     // When the caller specifies a layer, return only that layer's snapshot.
     // When no layer is specified (e.g. the MCP graph_snapshot tool), merge
     // both layers so callers without layer awareness see the full graph.
@@ -2218,27 +2333,13 @@ async fn perform_dashboard_graph(
     let response = match (repo_snapshot, session_snapshot) {
         (Some(repo), Some(session)) => {
             let merged = merge_graphs(&repo, &session);
-            let projection = GraphProjection {
-                total_nodes: merged.nodes.len(),
-                total_edges: merged.edges.len(),
-                returned_nodes: merged.nodes.len(),
-                returned_edges: merged.edges.len(),
-            };
-            map_dashboard_graph(merged, projection)
+            map_dashboard_graph_with_limits(merged, limits)
         }
-        (Some(graph), None) | (None, Some(graph)) => {
-            let projection = GraphProjection {
-                total_nodes: graph.nodes.len(),
-                total_edges: graph.edges.len(),
-                returned_nodes: graph.nodes.len(),
-                returned_edges: graph.edges.len(),
-            };
-            map_dashboard_graph(graph, projection)
-        }
+        (Some(graph), None) | (None, Some(graph)) => map_dashboard_graph_with_limits(graph, limits),
         (None, None) => {
             let nodes = load_memory_graph_nodes(&mut tx, &context, i64::MAX).await?;
             let links = load_memory_graph_edges(&mut tx, &context, i64::MAX).await?;
-            map_dashboard_graph_fallback(nodes, links)
+            map_dashboard_graph_fallback(nodes, links, limits)
         }
     };
     commit_tx(tx).await?;
@@ -2286,33 +2387,35 @@ async fn perform_knowledge_report(
     let context = scoped_context(&state.scope, Some(resolved_pid))?;
     let mut tx = begin_tx(state, &context).await?;
 
-    // v2.2.2: Support unified layer that merges repository + session reports
+    // v2.2.3: Support a compact unified report that keeps repository graph
+    // truth primary and adds bounded session-layer continuity signals.
     if layer == Some("unified") {
         let repo_graph =
             load_latest_knowledge_graph_by_type(&mut tx, &context, Some("repository")).await?;
-        let session_graph =
+        let mut session_graph =
             load_latest_knowledge_graph_by_type(&mut tx, &context, Some("session")).await?;
-        commit_tx(tx).await?;
 
-        let repo_report = repo_graph
-            .as_ref()
-            .map(|g| generate_knowledge_report(g))
-            .unwrap_or_default();
-        let session_report = session_graph
-            .as_ref()
-            .map(|g| generate_knowledge_report(g))
-            .unwrap_or_default();
+        // Session layer snapshots may live in the global project when a local
+        // repository-scoped run has not produced a session graph yet.
+        if session_graph.is_none() {
+            if let Some(global_pid) = resolve_global_project_id(&mut tx, &state.scope).await {
+                if global_pid != resolved_pid {
+                    let global_ctx = scoped_context(&state.scope, Some(global_pid))?;
+                    session_graph =
+                        load_latest_knowledge_graph_by_type(&mut tx, &global_ctx, Some("session"))
+                            .await?;
+                }
+            }
+        }
+        commit_tx(tx).await?;
 
         // Build unified cross-layer summary
         let cross_layer =
             build_unified_cross_layer_summary(repo_graph.as_ref(), session_graph.as_ref());
-
-        let unified_markdown = format!(
-            "# Unified Knowledge Report\n\n\
-             ## Repository Layer\n\n{}\n\n\
-             ## Session Layer\n\n{}\n\n\
-             ## Cross-Layer Summary\n\n{}",
-            repo_report, session_report, cross_layer
+        let unified_markdown = build_compact_unified_knowledge_report(
+            repo_graph.as_ref(),
+            session_graph.as_ref(),
+            &cross_layer,
         );
         let generated_at = repo_graph
             .as_ref()
@@ -2357,7 +2460,311 @@ async fn perform_knowledge_report(
     })
 }
 
-/// v2.2.2: Build a cross-layer summary from repository + session graphs.
+fn build_compact_unified_knowledge_report(
+    repo_graph: Option<&KnowledgeGraph>,
+    session_graph: Option<&KnowledgeGraph>,
+    cross_layer: &str,
+) -> String {
+    format!(
+        "# Unified Knowledge Report\n\n\
+         This compact report keeps repository graph truth separate from session continuity signals.\n\n\
+         ## Repository Layer\n\n{}\n\n\
+         ## Session Layer Communities\n\n{}\n\n\
+         ## Cross-Layer Summary\n\n{}",
+        build_compact_graph_layer_report("Repository", repo_graph),
+        build_compact_session_community_report(session_graph),
+        cross_layer
+    )
+}
+
+fn build_compact_graph_layer_report(layer_name: &str, graph: Option<&KnowledgeGraph>) -> String {
+    let Some(graph) = graph else {
+        return format!("_No {} graph snapshot found._", layer_name.to_lowercase());
+    };
+
+    let mut lines = Vec::new();
+    lines.extend(compact_graph_summary_lines(graph));
+
+    let hubs = compact_hub_lines(graph, UNIFIED_REPORT_HUB_LIMIT);
+    if !hubs.is_empty() {
+        lines.push(String::new());
+        lines.push("### Top Hubs".to_string());
+        lines.extend(hubs);
+    }
+
+    let communities = compact_community_lines(graph, UNIFIED_REPORT_COMMUNITY_LIMIT);
+    if !communities.is_empty() {
+        lines.push(String::new());
+        lines.push("### Top Communities".to_string());
+        lines.extend(communities);
+    }
+
+    lines.join("\n")
+}
+
+fn build_compact_session_community_report(session_graph: Option<&KnowledgeGraph>) -> String {
+    let Some(graph) = session_graph else {
+        return "_No session-layer graph snapshot found._".to_string();
+    };
+
+    let mut lines = compact_graph_summary_lines(graph);
+    let level0_total = graph.communities.iter().filter(|c| c.level == 0).count();
+    let level0_singletons = graph
+        .communities
+        .iter()
+        .filter(|c| c.level == 0 && c.node_count <= 1)
+        .count();
+    let level1_total = graph.communities.iter().filter(|c| c.level > 0).count();
+    lines.push(format!(
+        "- Community hierarchy: {} top-level, {} sub-communities, {} singleton top-level",
+        level0_total, level1_total, level0_singletons
+    ));
+
+    let communities = compact_community_lines(graph, UNIFIED_REPORT_COMMUNITY_LIMIT);
+    if communities.is_empty() {
+        lines.push(String::new());
+        lines.push("_No non-singleton session communities detected._".to_string());
+    } else {
+        lines.push(String::new());
+        lines.push("### Top Session Communities".to_string());
+        lines.extend(communities);
+    }
+
+    lines.join("\n")
+}
+
+fn compact_graph_summary_lines(graph: &KnowledgeGraph) -> Vec<String> {
+    let ed = &graph.statistics.evidence_distribution;
+    let mut node_type_counts: HashMap<&str, usize> = HashMap::new();
+    for node in &graph.nodes {
+        *node_type_counts.entry(node.node_type.as_str()).or_default() += 1;
+    }
+    let mut relation_counts: HashMap<&str, usize> = HashMap::new();
+    for edge in &graph.edges {
+        *relation_counts.entry(edge.relation.as_str()).or_default() += 1;
+    }
+
+    vec![
+        format!(
+            "- Snapshot: `{}`; {} nodes, {} edges, {} communities",
+            report_date(&graph.generated_at),
+            graph.statistics.node_count,
+            graph.statistics.edge_count,
+            graph.statistics.community_count
+        ),
+        format!(
+            "- Evidence: {} extracted, {} inferred, {} ambiguous",
+            ed.extracted, ed.inferred, ed.ambiguous
+        ),
+        format!(
+            "- Top node types: {}",
+            format_count_entries(node_type_counts.into_iter().collect(), 6)
+        ),
+        format!(
+            "- Top edge relations: {}",
+            format_count_entries(relation_counts.into_iter().collect(), 6)
+        ),
+    ]
+}
+
+fn compact_hub_lines(graph: &KnowledgeGraph, limit: usize) -> Vec<String> {
+    let mut degree: HashMap<&str, usize> = HashMap::new();
+    for edge in &graph.edges {
+        *degree.entry(edge.source.as_str()).or_default() += 1;
+        *degree.entry(edge.target.as_str()).or_default() += 1;
+    }
+
+    let mut hubs: Vec<_> = graph
+        .nodes
+        .iter()
+        .map(|node| (node, *degree.get(node.id.as_str()).unwrap_or(&0)))
+        .filter(|(_, degree)| *degree > 1)
+        .collect();
+    hubs.sort_by(|a, b| {
+        b.1.cmp(&a.1)
+            .then_with(|| a.0.node_type.cmp(&b.0.node_type))
+            .then_with(|| a.0.label.cmp(&b.0.label))
+    });
+
+    hubs.into_iter()
+        .take(limit)
+        .map(|(node, degree)| {
+            format!(
+                "- `{}` ({}; degree {})",
+                report_inline_code(&compact_node_label(node)),
+                node.node_type,
+                degree
+            )
+        })
+        .collect()
+}
+
+fn compact_community_lines(graph: &KnowledgeGraph, limit: usize) -> Vec<String> {
+    let node_map: HashMap<&str, &KnowledgeNode> = graph
+        .nodes
+        .iter()
+        .map(|node| (node.id.as_str(), node))
+        .collect();
+    let mut communities: Vec<_> = graph
+        .communities
+        .iter()
+        .filter(|community| community.level == 0 && community.node_count > 1)
+        .collect();
+    communities.sort_by(|a, b| {
+        b.node_count
+            .cmp(&a.node_count)
+            .then_with(|| b.cohesion_score.total_cmp(&a.cohesion_score))
+            .then_with(|| a.community_id.cmp(&b.community_id))
+    });
+
+    let total = communities.len();
+    let mut lines = Vec::new();
+    for community in communities.into_iter().take(limit) {
+        let label = community
+            .label
+            .as_deref()
+            .map(|value| truncate_report_text(value, 96))
+            .unwrap_or_else(|| format!("Community {}", community.community_id));
+        let path = community
+            .community_path
+            .as_deref()
+            .map(|value| format!("; path {}", value))
+            .unwrap_or_default();
+        lines.push(format!(
+            "- **{}**: id {}; {} nodes; cohesion {:.2}{}",
+            label, community.community_id, community.node_count, community.cohesion_score, path
+        ));
+        lines.push(format!(
+            "  - Representatives: {}",
+            format_node_refs(
+                &community.representative_nodes,
+                &node_map,
+                UNIFIED_REPORT_NODE_REF_LIMIT
+            )
+        ));
+        if !community.bridge_nodes.is_empty() {
+            lines.push(format!(
+                "  - Bridges: {}",
+                format_node_refs(
+                    &community.bridge_nodes,
+                    &node_map,
+                    UNIFIED_REPORT_NODE_REF_LIMIT
+                )
+            ));
+        }
+    }
+
+    if total > limit {
+        lines.push(format!(
+            "_Omitted {} additional non-singleton top-level communities._",
+            total - limit
+        ));
+    }
+
+    lines
+}
+
+fn format_node_refs(
+    node_ids: &[String],
+    node_map: &HashMap<&str, &KnowledgeNode>,
+    limit: usize,
+) -> String {
+    if node_ids.is_empty() {
+        return "none".to_string();
+    }
+
+    let mut labels: Vec<String> = node_ids
+        .iter()
+        .take(limit)
+        .map(|node_id| {
+            node_map
+                .get(node_id.as_str())
+                .map(|node| compact_node_label(node))
+                .unwrap_or_else(|| truncate_report_text(node_id, 96))
+        })
+        .map(|label| format!("`{}`", report_inline_code(&label)))
+        .collect();
+    if node_ids.len() > limit {
+        labels.push(format!("+{} more", node_ids.len() - limit));
+    }
+    labels.join(", ")
+}
+
+fn compact_node_label(node: &KnowledgeNode) -> String {
+    let metadata_label = [
+        "title",
+        "summary",
+        "path",
+        "sourceFile",
+        "file",
+        "symbol",
+        "name",
+        "provider",
+        "eventType",
+    ]
+    .iter()
+    .find_map(|key| {
+        node.metadata
+            .get(*key)
+            .and_then(|value| value.as_str())
+            .filter(|value| !value.trim().is_empty())
+    });
+
+    let candidate = metadata_label.unwrap_or(node.label.as_str());
+    if looks_like_uuid_label(candidate) || candidate.starts_with("memory:") {
+        return format!("{} {}", node.node_type, short_node_id(&node.id));
+    }
+    truncate_report_text(candidate, 96)
+}
+
+fn format_count_entries(mut entries: Vec<(&str, usize)>, limit: usize) -> String {
+    if entries.is_empty() {
+        return "none".to_string();
+    }
+    entries.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(b.0)));
+    entries
+        .into_iter()
+        .take(limit)
+        .map(|(label, count)| format!("`{}` ({})", report_inline_code(label), count))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+fn report_date(generated_at: &str) -> &str {
+    generated_at.split('T').next().unwrap_or(generated_at)
+}
+
+fn report_inline_code(value: &str) -> String {
+    value.replace('`', "'")
+}
+
+fn truncate_report_text(value: &str, max_chars: usize) -> String {
+    let normalized = value.split_whitespace().collect::<Vec<_>>().join(" ");
+    if normalized.chars().count() <= max_chars {
+        return normalized;
+    }
+
+    let keep = max_chars.saturating_sub(3);
+    let mut output = normalized.chars().take(keep).collect::<String>();
+    output.push_str("...");
+    output
+}
+
+fn looks_like_uuid_label(value: &str) -> bool {
+    value.len() == 36 && Uuid::parse_str(value).is_ok()
+}
+
+fn short_node_id(value: &str) -> String {
+    value
+        .rsplit(':')
+        .next()
+        .unwrap_or(value)
+        .chars()
+        .take(8)
+        .collect()
+}
+
+/// v2.2.3: Build a cross-layer summary from repository + session graphs.
 fn build_unified_cross_layer_summary(
     repo_graph: Option<&KnowledgeGraph>,
     session_graph: Option<&KnowledgeGraph>,
@@ -3817,8 +4224,61 @@ fn truncate_text(value: &str, max_chars: usize) -> String {
     format!("{truncated}…")
 }
 
-fn chroma_to_semantic_query_result(
-    hit: &ChromaQueryResult,
+async fn query_configured_vector_store(
+    state: &ApiState,
+    query: &str,
+    typed_filter: &[String],
+    limit: usize,
+    project_id: Option<Uuid>,
+) -> Result<Vec<VectorSearchResult>, chum_mem_pipeline::VectorStoreError> {
+    match state.config.vector_store_backend {
+        VectorStoreBackend::Chroma => {
+            let Some(chroma_url) = state.config.chroma_url.as_ref().map(|value| value.as_str())
+            else {
+                return Ok(Vec::new());
+            };
+            let hits = query_chroma_memories_typed(
+                &state.http_client,
+                chroma_url,
+                &state.config.chroma_collection,
+                query,
+                typed_filter,
+                limit,
+            )
+            .await?;
+            Ok(hits.iter().map(chroma_to_vector_search_result).collect())
+        }
+        VectorStoreBackend::TurboVec => {
+            let Some(root) = state.config.turbovec_path.as_ref() else {
+                return Ok(Vec::new());
+            };
+            let query_vector = vector_from_f64(&embed_text(query))?;
+            let store = TurboVecStore::new(
+                root,
+                &state.config.chroma_collection,
+                state.config.turbovec_bit_width,
+            );
+            let scope = TurboVecScope {
+                project_id,
+                user_id: None,
+                namespace: None,
+            };
+            store.search_typed_scoped(&query_vector, typed_filter, limit, &scope)
+        }
+    }
+}
+
+fn chroma_to_vector_search_result(hit: &ChromaQueryResult) -> VectorSearchResult {
+    VectorSearchResult {
+        id: hit.id,
+        distance: hit.distance,
+        document: hit.document.clone(),
+        metadata: hit.metadata.clone(),
+    }
+}
+
+fn vector_to_semantic_query_result(
+    hit: &VectorSearchResult,
 ) -> chum_mem_pipeline::SemanticQueryResult {
     chum_mem_pipeline::SemanticQueryResult {
         id: hit.id,
@@ -4037,19 +4497,91 @@ fn map_dashboard_graph(
     }
 }
 
+fn map_dashboard_graph_with_projection_totals(
+    graph: KnowledgeGraph,
+    total_nodes: usize,
+    total_edges: usize,
+) -> DashboardGraphResponse {
+    let projection = GraphProjection {
+        total_nodes,
+        total_edges,
+        returned_nodes: graph.nodes.len(),
+        returned_edges: graph.edges.len(),
+    };
+    map_dashboard_graph(graph, projection)
+}
+
+fn dashboard_graph_limits(
+    global_request: bool,
+    max_nodes: Option<usize>,
+    max_edges: Option<usize>,
+) -> Option<(usize, usize)> {
+    let default_nodes = if global_request {
+        Some(DASHBOARD_GLOBAL_GRAPH_DEFAULT_MAX_NODES)
+    } else {
+        None
+    };
+    let default_edges = if global_request {
+        Some(DASHBOARD_GLOBAL_GRAPH_DEFAULT_MAX_EDGES)
+    } else {
+        None
+    };
+    let nodes = max_nodes.or(default_nodes)?;
+    let edges = max_edges.or(default_edges)?;
+    Some((
+        nodes.clamp(1, DASHBOARD_GRAPH_HARD_MAX_NODES),
+        edges.clamp(1, DASHBOARD_GRAPH_HARD_MAX_EDGES),
+    ))
+}
+
+fn map_dashboard_graph_with_limits(
+    graph: KnowledgeGraph,
+    limits: Option<(usize, usize)>,
+) -> DashboardGraphResponse {
+    if let Some((max_nodes, max_edges)) = limits {
+        let (projected, projection) = project_graph_for_dashboard(&graph, max_nodes, max_edges);
+        map_dashboard_graph(projected, projection)
+    } else {
+        let projection = GraphProjection {
+            total_nodes: graph.nodes.len(),
+            total_edges: graph.edges.len(),
+            returned_nodes: graph.nodes.len(),
+            returned_edges: graph.edges.len(),
+        };
+        map_dashboard_graph(graph, projection)
+    }
+}
+
 fn map_dashboard_graph_fallback(
     nodes: Vec<DashboardGraphNodeRow>,
     edges: Vec<DashboardGraphEdgeRow>,
+    limits: Option<(usize, usize)>,
 ) -> DashboardGraphResponse {
+    let total_nodes = nodes.len();
+    let total_edges = edges.len();
+    let (max_nodes, max_edges) = limits.unwrap_or((total_nodes, total_edges));
+    let returned_nodes = total_nodes.min(max_nodes);
+    let kept_node_ids = nodes
+        .iter()
+        .take(returned_nodes)
+        .map(|node| node.id)
+        .collect::<HashSet<_>>();
+    let returned_edges = edges
+        .iter()
+        .filter(|edge| kept_node_ids.contains(&edge.source) && kept_node_ids.contains(&edge.target))
+        .take(max_edges)
+        .count();
+
     DashboardGraphResponse {
         projection: GraphProjection {
-            total_nodes: nodes.len(),
-            total_edges: edges.len(),
-            returned_nodes: nodes.len(),
-            returned_edges: edges.len(),
+            total_nodes,
+            total_edges,
+            returned_nodes,
+            returned_edges,
         },
         nodes: nodes
             .into_iter()
+            .take(returned_nodes)
             .map(|node| GraphNode {
                 id: format!("memory:{}", node.id),
                 label: node.title,
@@ -4059,6 +4591,10 @@ fn map_dashboard_graph_fallback(
             .collect(),
         links: edges
             .into_iter()
+            .filter(|edge| {
+                kept_node_ids.contains(&edge.source) && kept_node_ids.contains(&edge.target)
+            })
+            .take(max_edges)
             .map(|edge| GraphLink {
                 source: format!("memory:{}", edge.source),
                 target: format!("memory:{}", edge.target),
@@ -4139,6 +4675,88 @@ async fn load_merged_snapshots_by_type(
         });
     }
     Ok(merged)
+}
+
+async fn load_projected_merged_snapshots_by_type(
+    tx: &mut Transaction<'_, Postgres>,
+    context: &RepositoryContext,
+    snapshot_type: &str,
+    limits: (usize, usize),
+) -> Result<Option<(KnowledgeGraph, usize, usize)>, DomainError> {
+    let rows = sqlx::query(
+        r#"
+        select distinct on (project_id)
+          id,
+          node_count,
+          edge_count
+        from public.knowledge_snapshots
+        where organization_id = $1
+          and team_id = $2
+          and snapshot_type = $3
+        order by project_id, created_at desc
+        "#,
+    )
+    .bind(context.organization_id)
+    .bind(context.team_id)
+    .bind(snapshot_type)
+    .fetch_all(&mut **tx)
+    .await
+    .map_err(DbError::from)?;
+
+    if rows.is_empty() {
+        return Ok(None);
+    }
+
+    let total_nodes = rows.iter().try_fold(0usize, |acc, row| {
+        let count = row.try_get::<i32, _>("node_count").map_err(DbError::from)?;
+        Ok::<_, DomainError>(acc.saturating_add(usize::try_from(count).unwrap_or_default()))
+    })?;
+    let total_edges = rows.iter().try_fold(0usize, |acc, row| {
+        let count = row.try_get::<i32, _>("edge_count").map_err(DbError::from)?;
+        Ok::<_, DomainError>(acc.saturating_add(usize::try_from(count).unwrap_or_default()))
+    })?;
+
+    let (max_nodes, max_edges) = limits;
+    let mut merged: Option<KnowledgeGraph> = None;
+
+    for row in rows {
+        let returned_nodes = merged.as_ref().map_or(0, |graph| graph.nodes.len());
+        let returned_edges = merged.as_ref().map_or(0, |graph| graph.edges.len());
+        if returned_nodes >= max_nodes && returned_edges >= max_edges {
+            break;
+        }
+
+        let snapshot_id = row.try_get::<Uuid, _>("id").map_err(DbError::from)?;
+        let Some(snapshot_row) = sqlx::query(
+            r#"
+            select snapshot
+            from public.knowledge_snapshots
+            where id = $1
+            "#,
+        )
+        .bind(snapshot_id)
+        .fetch_optional(&mut **tx)
+        .await
+        .map_err(DbError::from)?
+        else {
+            continue;
+        };
+
+        let snapshot = snapshot_row
+            .try_get::<Value, _>("snapshot")
+            .map_err(DbError::from)?;
+        let graph: KnowledgeGraph = serde_json::from_value(snapshot)
+            .map_err(|error| DomainError::Internal(error.to_string()))?;
+        let remaining_nodes = max_nodes.saturating_sub(returned_nodes).max(1);
+        let remaining_edges = max_edges.saturating_sub(returned_edges).max(1);
+        let (projected, _) = project_graph_for_dashboard(&graph, remaining_nodes, remaining_edges);
+        merged = Some(match merged {
+            Some(base) => merge_graphs(&base, &projected),
+            None => projected,
+        });
+    }
+
+    Ok(merged.map(|graph| (graph, total_nodes, total_edges)))
 }
 
 async fn load_latest_snapshot_artifacts_by_type(
@@ -4714,11 +5332,175 @@ mod tests {
         }
     }
 
+    fn report_test_graph() -> KnowledgeGraph {
+        let project_id = Uuid::parse_str("00000000-0000-0000-0000-000000000003").unwrap();
+        let nodes = vec![
+            KnowledgeNode {
+                id: "memory:decision".to_string(),
+                label: "memory:decision".to_string(),
+                node_type: "decision".to_string(),
+                source_type: "session".to_string(),
+                source_id: "session-a".to_string(),
+                metadata: json!({"title":"Decision to keep repository truth primary"}),
+                community_id: Some(1),
+            },
+            KnowledgeNode {
+                id: "memory:task".to_string(),
+                label: "memory:task".to_string(),
+                node_type: "task".to_string(),
+                source_type: "session".to_string(),
+                source_id: "session-a".to_string(),
+                metadata: json!({"summary":"Update SKILL.md files to start from unified reports"}),
+                community_id: Some(1),
+            },
+            KnowledgeNode {
+                id: "file:rust/apps/api/src/main.rs".to_string(),
+                label: "rust/apps/api/src/main.rs".to_string(),
+                node_type: "file".to_string(),
+                source_type: "repository".to_string(),
+                source_id: "repo".to_string(),
+                metadata: json!({"path":"rust/apps/api/src/main.rs"}),
+                community_id: Some(2),
+            },
+            KnowledgeNode {
+                id: "symbol:knowledge_report".to_string(),
+                label: "knowledge_report".to_string(),
+                node_type: "symbol".to_string(),
+                source_type: "repository".to_string(),
+                source_id: "repo".to_string(),
+                metadata: json!({"sourceFile":"rust/apps/api/src/main.rs"}),
+                community_id: Some(2),
+            },
+            KnowledgeNode {
+                id: "memory:low".to_string(),
+                label: "Low priority singleton".to_string(),
+                node_type: "memory".to_string(),
+                source_type: "session".to_string(),
+                source_id: "session-b".to_string(),
+                metadata: json!({}),
+                community_id: Some(3),
+            },
+        ];
+        let edges = vec![
+            chum_mem_pipeline::KnowledgeEdge {
+                source: "memory:decision".to_string(),
+                target: "memory:task".to_string(),
+                relation: "supports".to_string(),
+                evidence: "extracted".to_string(),
+                weight: 1.0,
+                source_file: None,
+                metadata: json!({}),
+            },
+            chum_mem_pipeline::KnowledgeEdge {
+                source: "file:rust/apps/api/src/main.rs".to_string(),
+                target: "symbol:knowledge_report".to_string(),
+                relation: "contains".to_string(),
+                evidence: "extracted".to_string(),
+                weight: 1.0,
+                source_file: Some("rust/apps/api/src/main.rs".to_string()),
+                metadata: json!({}),
+            },
+        ];
+        KnowledgeGraph {
+            version: "1.0.0".to_string(),
+            generated_at: "2026-05-23T00:00:00Z".to_string(),
+            project_id,
+            nodes,
+            edges,
+            communities: vec![
+                chum_mem_pipeline::CommunityInfo {
+                    community_id: 1,
+                    label: Some("Session continuity and default report policy".to_string()),
+                    node_count: 2,
+                    cohesion_score: 0.91,
+                    representative_nodes: vec![
+                        "memory:decision".to_string(),
+                        "memory:task".to_string(),
+                    ],
+                    bridge_nodes: Vec::new(),
+                    community_path: Some("1".to_string()),
+                    level: 0,
+                },
+                chum_mem_pipeline::CommunityInfo {
+                    community_id: 2,
+                    label: Some("Knowledge report runtime".to_string()),
+                    node_count: 2,
+                    cohesion_score: 0.84,
+                    representative_nodes: vec![
+                        "file:rust/apps/api/src/main.rs".to_string(),
+                        "symbol:knowledge_report".to_string(),
+                    ],
+                    bridge_nodes: Vec::new(),
+                    community_path: Some("2".to_string()),
+                    level: 0,
+                },
+                chum_mem_pipeline::CommunityInfo {
+                    community_id: 3,
+                    label: Some("Low priority singleton".to_string()),
+                    node_count: 1,
+                    cohesion_score: 0.1,
+                    representative_nodes: vec!["memory:low".to_string()],
+                    bridge_nodes: Vec::new(),
+                    community_path: Some("3".to_string()),
+                    level: 0,
+                },
+                chum_mem_pipeline::CommunityInfo {
+                    community_id: 4,
+                    label: Some("Nested session detail".to_string()),
+                    node_count: 2,
+                    cohesion_score: 0.77,
+                    representative_nodes: vec!["memory:decision".to_string()],
+                    bridge_nodes: Vec::new(),
+                    community_path: Some("1.4".to_string()),
+                    level: 1,
+                },
+            ],
+            statistics: chum_mem_pipeline::GraphStatistics {
+                node_count: 5,
+                edge_count: 2,
+                community_count: 4,
+                evidence_distribution: chum_mem_pipeline::EvidenceDistribution {
+                    extracted: 2,
+                    inferred: 0,
+                    ambiguous: 0,
+                },
+                avg_degree: 0.8,
+                density: 0.2,
+                isolated_nodes: 1,
+            },
+        }
+    }
+
     #[test]
     fn provider_id_accepts_non_bundled_clients() {
         assert_eq!(normalize_provider_id("Cursor").unwrap(), "cursor");
         assert_eq!(normalize_provider_id("aider_2").unwrap(), "aider_2");
         assert!(normalize_provider_id("claude code").is_err());
+    }
+
+    #[test]
+    fn compact_session_report_includes_bounded_session_communities() {
+        let graph = report_test_graph();
+        let report = build_compact_session_community_report(Some(&graph));
+
+        assert!(report.contains("Top Session Communities"));
+        assert!(report.contains("Session continuity and default report policy"));
+        assert!(report.contains("Decision to keep repository truth primary"));
+        assert!(report.contains("3 top-level, 1 sub-communities, 1 singleton top-level"));
+        assert!(!report.contains("Nested session detail"));
+        assert!(!report.contains("Low priority singleton: id 3"));
+    }
+
+    #[test]
+    fn compact_unified_report_does_not_embed_full_layer_reports() {
+        let graph = report_test_graph();
+        let report = build_compact_unified_knowledge_report(Some(&graph), Some(&graph), "No links");
+
+        assert!(report.contains("# Unified Knowledge Report"));
+        assert!(report.contains("## Repository Layer"));
+        assert!(report.contains("## Session Layer Communities"));
+        assert!(report.contains("## Cross-Layer Summary"));
+        assert!(!report.contains("# Knowledge Report  ("));
     }
 
     #[tokio::test]

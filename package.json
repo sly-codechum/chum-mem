@@ -28,6 +28,8 @@
     "docker:down": "docker compose down -v",
     "volumes:backup": "./scripts/backup-volumes.sh",
     "volumes:restore": "./scripts/restore-volumes.sh",
+    "turbovec:reindex": "./scripts/reindex-turbovec.sh",
+    "turbovec:reindex:reset": "./scripts/reindex-turbovec.sh --reset-index",
     "sessions:import": "tsx ./scripts/import-sessions.ts",
     "bench:ingest:smoke": "tsx ./scripts/benchmark/ingest-scale.ts --profile smoke",
     "bench:ingest:scale": "tsx ./scripts/benchmark/ingest-scale.ts --profile scale",

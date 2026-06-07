@@ -54,6 +54,27 @@ describe('GraphDataStore', () => {
     expect(store.grow(5)).toBeNull();
   });
 
+  it('merges expanded capped API responses without replacing visible nodes', () => {
+    const store = new GraphDataStore();
+    store.setApiData(makeNodes(3), makeLinks(3), 10, 9);
+    store.loadInitial(3);
+
+    const beforeIds = store.nodes.map((node) => node.id);
+    const growth = store.mergeApiData(makeNodes(6), makeLinks(6), 10, 9);
+
+    expect(growth).toEqual({
+      prevCount: 3,
+      newCount: 6,
+      nodesAdded: true,
+      linksChanged: true,
+    });
+    expect(store.nodes.slice(0, 3).map((node) => node.id)).toEqual(beforeIds);
+    expect(store.nodes).toHaveLength(6);
+    expect(store.links.length).toBeGreaterThan(2);
+    expect(store.totalApiNodes).toBe(10);
+    expect(store.totalApiEdges).toBe(9);
+  });
+
   it('rebuilds link index correctly', () => {
     const store = new GraphDataStore();
     const nodes: GraphNode[] = [

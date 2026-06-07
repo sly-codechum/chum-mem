@@ -125,6 +125,28 @@ export class GraphEngine {
     }
   }
 
+  /**
+   * Merge an expanded capped payload into the current graph without resetting
+   * existing node positions or rerunning full layout warmup.
+   */
+  mergeFromApi(payload: GraphApiPayload): boolean {
+    const rawNodes = payload.nodes ?? [];
+    const rawLinks = payload.links ?? payload.edges ?? [];
+    const totalNodes = payload.projection?.totalNodes ?? rawNodes.length;
+    const totalEdges = payload.projection?.totalEdges ?? rawLinks.length;
+    const growth = this.store.mergeApiData(rawNodes, rawLinks, totalNodes, totalEdges);
+    if (!growth) return false;
+
+    if (growth.nodesAdded) {
+      this.simulation.positionNewNodes(growth.prevCount, growth.newCount, this.store.links);
+    }
+    this.simulation.reconfigureSim(this.store.links, this.store.nodes.length);
+    this.rebuild();
+    if (this.activeTypeFilter) this.applyTypeFilter(this.activeTypeFilter);
+    this.emitInfo();
+    return true;
+  }
+
   private ingestPayload(payload: GraphApiPayload): void {
     const rawNodes = payload.nodes ?? [];
     const rawLinks = payload.links ?? payload.edges ?? [];
@@ -353,16 +375,24 @@ export class GraphEngine {
    * Re-fetch graph data for the given layer and reinitialize the simulation.
    * Uses async warmup to avoid freezing the UI.
    */
-  async reloadGraph(layer = 'session', onProgress?: (frac: number) => void, projectId?: string): Promise<void> {
+  async reloadGraph(
+    layer = 'session',
+    onProgress?: (frac: number) => void,
+    projectId?: string,
+    limits?: { maxNodes?: number; maxEdges?: number },
+  ): Promise<GraphApiPayload> {
     this.currentLayer = layer;
     const params = new URLSearchParams();
     if (layer) params.set('layer', layer);
     if (projectId) params.set('projectId', projectId);
+    if (limits?.maxNodes !== undefined) params.set('maxNodes', String(limits.maxNodes));
+    if (limits?.maxEdges !== undefined) params.set('maxEdges', String(limits.maxEdges));
     const qs = params.toString();
     const res = await fetch(`/api/graph${qs ? `?${qs}` : ''}`);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const payload = await res.json() as GraphApiPayload;
     await this.loadFromApiAsync(payload, onProgress);
+    return payload;
   }
 
   /** Dispose all resources and stop animation */

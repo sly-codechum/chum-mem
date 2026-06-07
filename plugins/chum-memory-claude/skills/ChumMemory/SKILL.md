@@ -1,6 +1,6 @@
 ---
 name: ChumMemory
-description: "Always-on knowledge graph and memory retrieval for code work. USE on every prompt that touches code — finding symbols, tracing imports, understanding architecture, recalling past decisions, debugging, refactoring. Replaces grep/glob for anything tree-sitter can parse. Two layers: repository (code structure) and session (interaction history). The plugin hook keeps the graph fresh before each turn — no manual import needed. PCKC v2.2.3 model: claims are the unit of memory, proof is the unit of trust, compiled minimal proof sets are the unit of context. Three-way hybrid search: lexical + pgvector ANN + Chroma ML. Graphify-style markdown reports."
+description: "Always-on knowledge graph and memory retrieval for code work. USE on every prompt that touches code — finding symbols, tracing imports, understanding architecture, recalling past decisions, debugging, refactoring. Replaces grep/glob for anything tree-sitter can parse. Two layers: repository (code structure) and session (interaction history). The plugin hook keeps the graph fresh before each turn — no manual import needed. PCKC v2.2.3 model: claims are the unit of memory, proof is the unit of trust, compiled minimal proof sets are the unit of context. Three-way hybrid search: lexical + pgvector ANN + Chroma ML. Compact unified markdown reports."
 ---
 
 # ChumMemory (PCKC v2.2.3)
@@ -9,9 +9,9 @@ The plugin hook runs `sync.sh` on every `UserPromptSubmit`, so the repository gr
 
 ## The one rule
 
-> **On every turn that touches code, call `knowledge_report(layer:"repository")` first, then a repository-layer `knowledge_query`, then `mem_search`, and only then Read / Grep / Glob / Edit.**
+> **On every turn that touches code, call `knowledge_report(layer:"unified")` first, then a repository-layer `knowledge_query`, then `mem_search`, and only then Read / Grep / Glob / Edit.**
 
-Treat the report markdown as the primary high-level repository context. The first repository query should build structural awareness of relevant components, architecture, and relationships; it is not a filename grep substitute. If the report or query fails, surface the error and fix the project-scoping issue before falling back to lower-level search.
+Treat the compact unified report as the primary high-level context: repository graph truth remains separate and primary for code facts, while session-layer communities provide continuity signals. The first repository query should build structural awareness of relevant components, architecture, and relationships; it is not a filename grep substitute. If the report or query fails, surface the error and fix the project-scoping issue before falling back to lower-level search.
 
 ---
 
@@ -32,12 +32,12 @@ The runtime uses a **Proof-Carrying Knowledge Compiler** with three-way hybrid s
 - **Ranking weights**: semantic 30% + lexical 32% + session relevance 12% + graph proximity 10% + recency/importance/confidence 22%. Content match dominates.
 - **Typed embedding partitions**: `mem_search` with `types` routes to per-type Chroma collections (`memories_bug`, `memories_decision`, etc.) for higher precision.
 - **Hierarchical communities**: level-0 clusters + level-1 sub-communities via Leiden. Supports graphs up to 100K nodes / 200K edges.
-- **Graphify-style reports**: `knowledge_report` returns markdown with one-line extraction summary, god nodes, node/edge type distributions, and community hierarchy. Reports are per-project — each project folder gets its own report from its synced code.
+- **Compact unified reports**: `knowledge_report(layer:"unified")` returns markdown with a repository-layer digest, bounded session-layer communities, and a cross-layer summary. Repository-only and session-only reports remain available for deeper follow-up.
 - **Community cache**: 5-minute TTL, project-scoped. First query loads the session graph (~800ms), subsequent queries use cached community maps (<100ms).
 - **Soft type filter**: when `types` are requested, matching results are preferred. If no exact matches exist, unfiltered results are returned rather than empty.
 - **Deterministic governance**: claims have a `governanceState` field (active/pinned/archived/rejected). Pinned claims get a +0.20 ranking boost; archived (-0.50) and rejected (-0.80) are excluded from default search. Use `claim_govern` to transition states with an optional reason for audit.
 - **Continuation retrieval**: queries like "continue prior work" automatically boost unsuperseded actionable claims (task, decision, open_question) and penalize superseded ones. The ranker detects 17 continuation signal phrases.
-- **Session-start knowledge report**: the hook fetches `knowledge_report(layer:repository)` on `SessionStart` and injects a truncated codebase overview into the session context, so you start every conversation knowing the project shape.
+- **Session-start knowledge report**: the hook fetches `knowledge_report(layer:unified)` on `SessionStart` and injects a truncated unified overview into the session context, so you start every conversation with both project shape and continuity signals.
 
 ### Project scoping
 
@@ -50,6 +50,7 @@ The system operates in **multi-project mode**. Each project folder is automatica
 
 **Scoping rules:**
 - **Repository layer** (`knowledge_query`, `knowledge_report`, `knowledge_communities`): **strictly per-project**. `projectId` is required — the API returns an error if omitted. Each project folder has its own knowledge graph built from its synced code. No cross-project fallback. The hook always passes the resolved project ID automatically.
+- **Unified report** (`knowledge_report(layer:"unified")`): repository graph stays strictly project-scoped; session graph is project-scoped with global fallback. The output is compact and layer-labeled, not a merged graph.
 - **Session layer** (`knowledge_query`, `knowledge_communities`): per-project with **global fallback**. If a project-specific session graph query finds no snapshot, the API automatically retries against the "global" project.
 - **Memory search** (`mem_search`): per-project with **global fallback**. If a project-specific memory search returns no results, the system automatically retries against the "global" project (which holds all historical memories from before per-project scoping). This ensures past decisions and facts are always accessible.
 - **Sessions**: scoped to the project folder where they occur. The hook exports the project ID so `session_start` associates the session with the correct project.
@@ -70,7 +71,7 @@ Practical consequences for a turn:
 
 Before any task-specific lookup, execute this sequence exactly:
 
-1. `knowledge_report(layer:"repository", projectId)` — markdown report, primary high-level context.
+1. `knowledge_report(layer:"unified", projectId)` — compact markdown report, primary high-level context.
 2. `knowledge_query(query:"search"|"hub_nodes", layer:"repository", projectId, text?)` — repository-level architecture/relationship overview.
 3. `mem_search(query, mode:"hybrid", disclosureLevel:"overview", limit:5, projectId?)` — compact PCKC claim recall after graph context.
 4. Read files or use Grep/Glob only after steps 1-3.
@@ -99,7 +100,7 @@ Then choose the task-specific graph query:
 
 **"How does auth work here?"** (repository-truth mode)
 ```
-knowledge_report(layer:"repository")
+knowledge_report(layer:"unified")
 knowledge_query(query:"search", text:"auth login token session", layer:"repository")
 mem_search(query:"authentication flow", mode:"hybrid", limit:5, types:["fact","decision","implementation_detail"])
 ```
@@ -123,7 +124,7 @@ Keep only hits with no `superseded_by` and `valid_to` unset. If two unsuperseded
 
 **"What bugs are open on the retrieval pipeline?"** (debugging, claim-native)
 ```
-knowledge_report(layer:"repository")
+knowledge_report(layer:"unified")
 knowledge_query(query:"search", text:"retrieval ranking pipeline", layer:"repository")
 mem_search(query:"retrieval ranking bug", types:["bug","open_question"], mode:"hybrid")
 knowledge_query(query:"neighbors", nodeId:"file:rust/crates/chum_mem_pipeline/src/ranking.rs", layer:"repository", depth:2)
@@ -178,7 +179,7 @@ Rule of thumb: if a hit has `activeConflictCount > 0`, or `verificationStatus !=
 
 Pick a mode explicitly for every non-trivial turn. PCKC distinguishes four:
 
-1. **Repository-truth mode** — questions about files, symbols, imports, architecture, call graphs, debugging state backed by code + tests. First call is always `knowledge_report(layer:"repository")`, followed by repository-layer `knowledge_query`. Session memory is a secondary witness, not the source of truth.
+1. **Repository-truth mode** — questions about files, symbols, imports, architecture, call graphs, debugging state backed by code + tests. First call is always `knowledge_report(layer:"unified")`, followed by repository-layer `knowledge_query`. Session memory is a secondary witness, not the source of truth.
 2. **Continuity mode** — questions about prior decisions, active tasks, unresolved work, user intent over time. Still load `knowledge_report` and a repository-layer `knowledge_query` first, then call `mem_search` on `decision` / `task` / `open_question` claim types.
 3. **Conflict mode** — triggered when retrieved claims disagree, `activeConflictCount > 0`, or two unsuperseded decisions contradict. Behaviour: **surface the conflict explicitly**, prefer the higher `authorityClass`, request user verification when authorities tie, and refuse unsupported synthesis.
 4. **Proof-limited mode** — when only part of the request is answerable from verified claims. Behaviour: answer only what proof supports, mark the unknowns, and **never fill gaps with narrative guesses**. "I don't have a verified claim for X" is a valid answer.
@@ -187,9 +188,9 @@ Pick a mode explicitly for every non-trivial turn. PCKC distinguishes four:
 
 ## Anti-patterns — DO NOT
 
-- ❌ Open with `knowledge_query`, `mem_search`, `Grep`, or `Glob` before `knowledge_report(layer:"repository")`.
+- ❌ Open with `knowledge_query`, `mem_search`, `Grep`, or `Glob` before `knowledge_report(layer:"unified")`.
 - ❌ Run `knowledge_query` and `mem_search` in parallel for the first lookup. The required order is report → repository query → memory search.
-- ❌ Omit the `layer` argument → always pass `repository` or `session`.
+- ❌ Omit the `layer` argument → always pass `unified`, `repository`, or `session` as the tool allows.
 - ❌ Treat a `mem_search` `summary` string as ground truth without reading `verificationStatus`, `authorityClass`, and `activeConflictCount` first.
 - ❌ Cite a claim that has `superseded_by` set, or whose `valid_to` is in the past, as current truth.
 - ❌ Silently average conflicting claims — **surface the conflict**, prefer authority, request verification when authorities tie.
@@ -210,8 +211,9 @@ Pick a mode explicitly for every non-trivial turn. PCKC distinguishes four:
 |---|---|---|---|---|
 | `repository` | Files, symbols, imports, call graph, rationale comments | `fact`, `implementation_detail`, `constraint` | AST-parsed via tree-sitter | Semantic similarity (token overlap) |
 | `session` | Prompts, tool calls, file changes, errors, episodes, decisions, tasks | `decision`, `task`, `bug`, `fix`, `open_question`, `fact` | Directly observed events | Cross-session patterns / causal chains |
+| `unified` | First-turn compact report only | Layer-labeled repository and session community digest | Repository graph + session events | Cross-layer summary |
 
-Each tool call targets **one** layer. Run two parallel calls if you need both. For code questions, **start with `repository`**; use `session` only to recall decisions, tasks, or past debugging state.
+Most graph tool calls target **one** layer. The `unified` layer is only for `knowledge_report` and is the required first call. After that, use `repository` for code truth and `session` only to recall decisions, tasks, or past debugging state.
 
 ---
 
@@ -249,7 +251,7 @@ The host hook (Claude Code or Codex) calls `session_start` → `session_event_ap
 
 **Knowledge graph**
 - `knowledge_query(query*={hub_nodes|shortest_path|neighbors|communities|search|goal_directed}, layer*={repository|session}, nodeId, targetNodeId, text, depth=1..5)`
-- `knowledge_report(layer*, projectId)` — returns **graphify-style markdown** (not JSON): summary, extraction %, node/edge types, god nodes, communities
+- `knowledge_report(layer*={unified|repository|session}, projectId)` — `unified` returns compact cross-layer markdown; layer-specific reports return full graphify-style markdown
 - `knowledge_communities(layer*, projectId)`
 - `knowledge_graph_export(layer*, projectId)`
 - `graph_snapshot()` — schema-level overview
@@ -266,10 +268,10 @@ The host hook (Claude Code or Codex) calls `session_start` → `session_event_ap
 
 ## Parallelism rules
 
-- The first call is never parallel: `knowledge_report(layer:"repository")` must complete before other retrieval.
+- The first call is never parallel: `knowledge_report(layer:"unified")` must complete before other retrieval.
 - After the report, run one repository-layer `knowledge_query` before memory search.
 - After report + repository query, independent `mem_search` calls may run in parallel.
-- `knowledge_report(repository)` ⫾ `knowledge_report(session)` is allowed only after the mandatory repository report has completed.
+- Additional layer-specific `knowledge_report(repository|session)` calls are allowed only after the mandatory unified report has completed.
 - Multiple `knowledge_query(neighbors, …)` for different files — parallel
 - Multiple `mem_search` calls for disjoint claim types (e.g. `["decision"]` ⫾ `["bug","open_question"]`) — parallel
 - Always `memory_get_batch` instead of multiple `memory_get`

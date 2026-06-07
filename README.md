@@ -58,19 +58,19 @@ Claims are not append-only. When a new claim contradicts an existing one:
 - Retrieval respects temporal validity: claims past `valid_to` or with `superseded_by` set are hidden by default
 - Agents surface conflicts explicitly rather than silently averaging contradictory information
 
-### Three-way hybrid search
+### Hybrid search
 
-Retrieval merges three signal sources:
+Retrieval merges lexical search, graph-aware ranking, and the configured vector store:
 
 | Source | Weight | What it finds |
 |--------|--------|--------------|
 | PostgreSQL full-text search (lexical) | 32% | Exact keyword matches, structured claim fields |
-| pgvector ANN (semantic) | 30% | Conceptually similar claims via embeddings |
-| ChromaDB ML embeddings | — | Per-type partitioned collections for precision |
+| Vector store semantic search | 30% | Conceptually similar claims via embeddings |
+| Typed vector partitions | — | Per-type collections for precision |
 
 Additional ranking signals: session relevance (12%), graph proximity (10%), recency/importance/confidence (16%).
 
-**Typed embedding partitions**: When `mem_search` receives `types: ["bug", "fix"]`, it routes to per-type Chroma collections (`memories_bug`, `memories_fix`). v2.2.2 achieves **1.000 typed search precision** — every result matches the requested type.
+**Typed embedding partitions**: When `mem_search` receives `types: ["bug", "fix"]`, it routes to per-type vector-store partitions (`memories_bug`, `memories_fix`). Chroma remains the default backend; TurboVec can be enabled with `VECTOR_STORE_BACKEND=turbovec` and persists indexes under `TURBOVEC_PATH`.
 
 ### Hierarchical communities
 
@@ -280,11 +280,36 @@ Measured against the live Docker Compose stack. Full methodology in `docs/resear
 - **Rust workspace**: `rust/apps/api`, `rust/apps/worker`, `rust/crates/*`
 - **Tree-sitter**: 17 grammar crates (19 languages)
 - **Leiden algorithm**: hierarchical community detection (level-0 + level-1)
-- **PostgreSQL + pgvector**: storage, full-text search, vector ANN, RLS multi-tenancy
-- **ChromaDB**: typed embedding partitions for per-claim-type precision
-- **Docker Compose**: service packaging (API, worker, Postgres, Chroma)
+- **PostgreSQL + pgvector**: storage, full-text search, rollback vector ANN, RLS multi-tenancy
+- **Vector store adapter**: Chroma by default; TurboVec feature-flagged typed partitions
+- **Docker Compose**: service packaging (API, worker, Postgres, Chroma, TurboVec volume)
 - **MCP protocol**: Streamable HTTP transport
 - **Web dashboard** (`apps/web/`): 3D force-graph visualization, search workbench, claim explorer
+
+## TurboVec backend
+
+Chroma remains the default vector-store backend. To enable TurboVec for typed vector partitions:
+
+```bash
+VECTOR_STORE_BACKEND=turbovec
+TURBOVEC_PATH=/data/turbovec
+TURBOVEC_BIT_WIDTH=4
+docker compose up -d --build
+```
+
+`TURBOVEC_PATH` defaults to `/data/turbovec` in Docker Compose, and the API and worker both mount the shared `turbovec_data` volume at that path. `TURBOVEC_BIT_WIDTH` defaults to `4`; valid values are `2`, `3`, or `4`.
+
+TurboVec stores one `.tvim` index and one `.json` sidecar per partition. The sidecar preserves the original memory UUID, document text, metadata, and a partition-local UUID-to-`u64` mapping required by TurboVec. Scoped partitions include project/user/namespace keys when those metadata fields are present, and typed partitions continue to use the existing memory type aliases such as `memories_fact` and `memories_impl_detail`.
+
+Rollback keeps the existing Chroma and pgvector paths available:
+
+```bash
+VECTOR_STORE_BACKEND=chroma docker compose up -d --build
+```
+
+TurboVec indexes are local files. Writes use temp-file replacement for sidecars and indexes, plus a per-partition writer lock file. The lock prevents concurrent writers but is intentionally simple; a crash during a write can leave a stale `.lock` file that must be inspected and removed manually before the next sync. Reads are lock-free and final API results are still SQL-scope revalidated before response assembly. Stop API and worker processes before backup or restore when running outside Docker, and avoid taking a file-level copy while the worker is actively syncing an index.
+
+The 1536-dimensional first add/search path can be slow while TurboVec initializes its SIMD/BLAS path; slow direct search tests are intentionally ignored in routine runs and should be executed explicitly for migration verification.
 
 ## Documentation
 
@@ -298,7 +323,7 @@ Measured against the live Docker Compose stack. Full methodology in `docs/resear
 
 ## Volume backup and restore
 
-Persistent runtime data lives in Docker volumes (`postgres_data`, `chroma_data`):
+Persistent runtime data lives in Docker volumes (`postgres_data`, `chroma_data`, and `turbovec_data` when TurboVec has been enabled):
 
 ```bash
 # Backup
@@ -312,6 +337,9 @@ pnpm volumes:restore -- ./backups/<timestamp>
 
 ```bash
 cargo test -p chum-mem-pipeline
+cargo test -p chum-mem-pipeline search_returns_typed_results -- --ignored --nocapture
+cargo test -p chum-mem-pipeline scoped_search_returns_only_requested_project_partition -- --ignored --nocapture
+cargo test -p chum-mem-pipeline search_respects_top_k -- --ignored --nocapture
 
 # 33 tests: AST parser (20), Leiden clustering (8), repository (3), derivation + knowledge (2)
 ```
@@ -323,4 +351,3 @@ cargo test -p chum-mem-pipeline
 - **[GraphRAG](https://arxiv.org/abs/2404.16130)** (Microsoft Research) — Hierarchical Leiden communities with map-reduce global queries. chum-mem's two-level community detection and community-aware retrieval routing are directly influenced by this work.
 - **[NeuroPath](https://arxiv.org/abs/2511.14096)** (NeurIPS 2025) — Goal-directed semantic path pruning over knowledge graphs. The 16.3% recall improvement and 22.8% token reduction results informed chum-mem's `goal_directed` query mode.
 - **[MiniRAG](https://arxiv.org/abs/2501.06713)** — Semantic-aware heterogeneous graph indexing. The idea of combining different node types (code symbols, session claims, documents) in one unified structure influenced the cross-layer edge design.
-

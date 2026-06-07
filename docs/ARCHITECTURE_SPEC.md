@@ -56,7 +56,7 @@ Supporting surfaces:
 - `plugins/` and `extensions/`: provider/plugin packaging and host integration
 - `infra/migrations`: explicit database schema history
 
-PostgreSQL remains the durable source of truth. Chroma is used for typed embedding collections in the semantic retrieval path. pgvector remains part of the hybrid retrieval model and durability/experimentation story.
+PostgreSQL remains the durable source of truth. The vector store layer is adapter-based: Chroma remains the default typed collection backend, while TurboVec can be enabled with `VECTOR_STORE_BACKEND=turbovec` for local persisted typed vector indexes. pgvector remains available for rollback and comparison while the TurboVec path is validated.
 
 ## 4. High-level architecture
 
@@ -76,7 +76,7 @@ MCP + HTTP API server
         +--> knowledge graph query/report service
         |
         v
-PostgreSQL + pgvector + Chroma
+PostgreSQL + pgvector + vector store adapter
         |
         +--> team/project/auth tables
         +--> sessions / session_events / session_episodes
@@ -430,7 +430,7 @@ The graph service must support:
 - goal-directed graph retrieval
 - human-readable reports
 
-The runtime supports repository, session, and unified reporting. Public tool schemas should remain aligned with that behavior.
+The runtime supports repository, session, and unified reporting. The unified report is the default agent prelude: a compact, layer-labeled Markdown report with repository digest, bounded session communities, and cross-layer summary. Public tool schemas should remain aligned with that behavior.
 
 ## 11. Search and retrieval
 
@@ -454,7 +454,7 @@ Generate candidates from multiple channels:
 
 1. PostgreSQL lexical search
 2. vector/embedding search
-3. Chroma typed collections
+3. typed vector-store partitions
 4. session graph proximity
 5. repository graph proximity
 
@@ -498,7 +498,7 @@ Operational guidance:
 
 Default retrieval workflow:
 
-1. `knowledge_report(layer:"repository")` first, in Markdown form
+1. `knowledge_report(layer:"unified")` first, in Markdown form
 2. repository-layer `knowledge_query` for relevant components, architecture, and relationships
 3. compact `mem_search` after graph context
 4. `memory_get_batch` only for selected IDs
@@ -721,7 +721,7 @@ Deployment units:
 - API server
 - worker service
 - PostgreSQL
-- Chroma
+- vector store backend: Chroma by default, TurboVec when explicitly enabled
 - optional queue/cache service
 - optional web dashboard
 

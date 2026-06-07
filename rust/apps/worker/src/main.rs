@@ -1,6 +1,6 @@
 use anyhow::Context;
 use chum_mem_app::{init_tracing, shutdown_signal};
-use chum_mem_config::AppConfig;
+use chum_mem_config::{AppConfig, VectorStoreBackend};
 use chum_mem_contracts::CanonicalEventType;
 use chum_mem_db::{
     Database, RepositoryContext, WorkerJobRecord, apply_repository_context, check_readiness,
@@ -8,9 +8,10 @@ use chum_mem_db::{
     load_pckc_memory_edges, load_session_events_limited, mark_session_replay_ready,
 };
 use chum_mem_pipeline::{
-    KnowledgeEdge, MemoryNodeInput, SessionEventRecord, UpsertMemory,
-    assign_communities_with_budget, build_knowledge_graph, generate_knowledge_report, merge_graphs,
-    to_node_link_json, to_persistable_memory_edge, upsert_chroma_memories_typed,
+    KnowledgeEdge, MemoryNodeInput, SessionEventRecord, TurboVecStore, UpsertMemory,
+    VectorStoreItem, assign_communities_with_budget, build_knowledge_graph,
+    generate_knowledge_report, merge_graphs, to_node_link_json, to_persistable_memory_edge,
+    upsert_chroma_memories_typed, vector_from_f64,
 };
 use reqwest::Client;
 use serde_json::{Value, json};
@@ -68,7 +69,7 @@ async fn main() -> anyhow::Result<()> {
     info!(
         poll_interval_ms = config.worker_poll_interval_ms,
         concurrency,
-        chroma_enabled = config.chroma_enabled(),
+        vector_store_enabled = config.vector_store_enabled(),
         project_scoped = config.project_id.is_some(),
         organization_id = %scope.organization_id,
         team_id = %scope.team_id,
@@ -418,9 +419,9 @@ async fn sync_chroma_index(
     http_client: &Client,
     job: &WorkerJobRecord,
 ) -> Result<(), String> {
-    let Some(chroma_url) = config.chroma_url.as_ref().map(|value| value.as_str()) else {
+    if !config.vector_store_enabled() {
         return Ok(());
-    };
+    }
     let session_id = job.session_id;
     let scoped = RepositoryContext {
         project_id: Some(job.project_id),
@@ -455,7 +456,8 @@ async fn sync_chroma_index(
         project_id = %job.project_id,
         session_id = ?session_id,
         memories_count = memories.len(),
-        "syncing memories to Chroma"
+        backend = ?config.vector_store_backend,
+        "syncing memories to configured vector store"
     );
 
     let payload = memories
@@ -477,11 +479,46 @@ async fn sync_chroma_index(
         })
         .collect::<Vec<_>>();
 
-    // v2.2.2 §3.3: Fan out to per-type partitions in addition to the
-    // all-types collection so typed mem_search can hit a narrow index.
-    upsert_chroma_memories_typed(http_client, chroma_url, &config.chroma_collection, &payload)
-        .await
-        .map_err(|error| error.to_string())
+    match config.vector_store_backend {
+        VectorStoreBackend::Chroma => {
+            let Some(chroma_url) = config.chroma_url.as_ref().map(|value| value.as_str()) else {
+                return Ok(());
+            };
+            // v2.2.2 §3.3: Fan out to per-type partitions in addition to the
+            // all-types collection so typed mem_search can hit a narrow index.
+            upsert_chroma_memories_typed(
+                http_client,
+                chroma_url,
+                &config.chroma_collection,
+                &payload,
+            )
+            .await
+            .map_err(|error| error.to_string())
+        }
+        VectorStoreBackend::TurboVec => {
+            let Some(root) = config.turbovec_path.as_ref() else {
+                return Ok(());
+            };
+            let store =
+                TurboVecStore::new(root, &config.chroma_collection, config.turbovec_bit_width);
+            let items = payload
+                .into_iter()
+                .map(|memory| {
+                    let vector = vector_from_f64(&chum_mem_pipeline::embed_text(&memory.document))
+                        .map_err(|error| error.to_string())?;
+                    Ok(VectorStoreItem {
+                        id: memory.id,
+                        vector,
+                        document: memory.document,
+                        metadata: memory.metadata,
+                    })
+                })
+                .collect::<Result<Vec<_>, String>>()?;
+            store
+                .upsert_typed(&items)
+                .map_err(|error| error.to_string())
+        }
+    }
 }
 
 /// Bulk-complete all pending jobs of a given type for a project,

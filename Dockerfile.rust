@@ -1,15 +1,25 @@
 # syntax=docker/dockerfile:1.7
 
 ARG RUST_VERSION=1
-ARG ALPINE_VERSION=3.22
+ARG DEBIAN_VERSION=bookworm
 ARG APP_UID=10001
 
-FROM rust:${RUST_VERSION}-alpine AS build
+FROM rust:${RUST_VERSION}-slim-${DEBIAN_VERSION} AS build
 WORKDIR /app
 
-RUN --mount=type=cache,target=/var/cache/apk,sharing=locked \
-    ln -s /var/cache/apk /etc/apk/cache \
-    && apk add --no-cache build-base pkgconf perl ca-certificates
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt,sharing=locked \
+    apt-get update \
+    && apt-get install -y --no-install-recommends \
+      build-essential \
+      ca-certificates \
+      lld \
+      libopenblas-dev \
+      perl \
+      pkg-config \
+    && rm -rf /var/lib/apt/lists/*
+
+ENV RUSTFLAGS="-C link-arg=-fuse-ld=lld"
 
 RUN --mount=type=bind,source=Cargo.toml,target=/app/Cargo.toml,readonly \
     --mount=type=bind,source=Cargo.lock,target=/app/Cargo.lock,readonly \
@@ -26,11 +36,21 @@ install -D /app/target/release/chum-mem-api /out/chum-mem-api
 install -D /app/target/release/chum-mem-worker /out/chum-mem-worker
 EOF
 
-FROM alpine:${ALPINE_VERSION} AS rust-runtime
+FROM debian:${DEBIAN_VERSION}-slim AS rust-runtime
 ARG APP_UID
 
-RUN apk add --no-cache ca-certificates curl dumb-init \
-    && adduser -D -H -u "${APP_UID}" appuser
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt,sharing=locked \
+    apt-get update \
+    && apt-get install -y --no-install-recommends \
+      ca-certificates \
+      curl \
+      dumb-init \
+      libopenblas0-pthread \
+    && rm -rf /var/lib/apt/lists/* \
+    && useradd --uid "${APP_UID}" --user-group --no-create-home --home-dir /nonexistent --shell /usr/sbin/nologin appuser \
+    && mkdir -p /data/turbovec \
+    && chown -R appuser:appuser /data
 
 WORKDIR /app
 USER appuser

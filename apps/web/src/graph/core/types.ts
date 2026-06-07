@@ -42,6 +42,8 @@ export interface GraphData {
 export interface GraphProjection {
   totalNodes: number;
   totalEdges: number;
+  returnedNodes?: number;
+  returnedEdges?: number;
 }
 
 export interface GraphApiPayload {

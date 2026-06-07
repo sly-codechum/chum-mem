@@ -130,12 +130,15 @@ export class GraphSimulation {
   }
 
   /** Position newly added nodes near their connected existing neighbors */
-  positionNewNodes(prevCount: number, newCount: number): void {
+  positionNewNodes(prevCount: number, newCount: number, links: IndexedLink[] = []): void {
+    const anchorLinks = links.length > 0
+      ? links.map(l => ({ source: l.sourceIdx, target: l.targetIdx, weight: l.weight }))
+      : this.currentLinks;
     for (let i = prevCount; i < newCount; i++) {
       // Find an existing anchor node this new node connects to
       let ax = 0, ay = 0, az = 0;
       let hasAnchor = false;
-      for (const l of this.currentLinks) {
+      for (const l of anchorLinks) {
         const other = l.source === i ? l.target : l.target === i ? l.source : -1;
         if (other >= 0 && other < prevCount) {
           const anchor = this.simNodes[other];

@@ -9,6 +9,8 @@ pub mod leiden;
 mod ranking;
 pub mod reconcile;
 mod repository;
+mod turbovec_store;
+mod vector_store;
 
 pub use chroma::{
     CHROMA_EMBEDDING_DIMENSIONS, ChromaQueryResult, UpsertMemory, effective_chroma_collection_name,
@@ -38,4 +40,9 @@ pub use ranking::{
 pub use repository::{
     RepositoryBuildArtifacts, RepositoryBuildOptions, RepositoryBuildResult, RepositoryFilePayload,
     SyncRules, build_repository_knowledge, parse_file_batch, parse_file_payload_batch, sync_rules,
+};
+pub use turbovec_store::{TurboVecScope, TurboVecStore};
+pub use vector_store::{
+    DeleteOptions, ScopeOptions, SearchOptions, VECTOR_EMBEDDING_DIMENSIONS, VectorSearchResult,
+    VectorStore, VectorStoreError, VectorStoreFuture, VectorStoreItem, vector_from_f64,
 };

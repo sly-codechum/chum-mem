@@ -17,6 +17,7 @@ fi
 
 postgres_volume="${POSTGRES_VOLUME:-${project_name}_postgres_data}"
 chroma_volume="${CHROMA_VOLUME:-${project_name}_chroma_data}"
+turbovec_volume="${TURBOVEC_VOLUME:-${project_name}_turbovec_data}"
 
 backup_volume() {
   local volume_name="$1"
@@ -40,11 +41,24 @@ backup_volume() {
 backup_volume "$postgres_volume" "postgres_data.tar.gz"
 backup_volume "$chroma_volume" "chroma_data.tar.gz"
 
+if docker volume inspect "$turbovec_volume" >/dev/null 2>&1; then
+  backup_volume "$turbovec_volume" "turbovec_data.tar.gz"
+elif [[ "${VECTOR_STORE_BACKEND:-chroma}" == "turbovec" || -n "${TURBOVEC_VOLUME:-}" ]]; then
+  echo "Volume not found: $turbovec_volume"
+  echo "TurboVec backup is required when VECTOR_STORE_BACKEND=turbovec or TURBOVEC_VOLUME is set."
+  echo "Start the stack at least once with: docker compose up -d"
+  echo "Then retry backup."
+  exit 1
+else
+  echo "Skipping TurboVec volume backup; volume not found and backend is not TurboVec."
+fi
+
 cat > "${backup_dir}/manifest.txt" <<EOF
 created_at=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 compose_project=${project_name}
 postgres_volume=${postgres_volume}
 chroma_volume=${chroma_volume}
+turbovec_volume=${turbovec_volume}
 EOF
 
 echo "Backup complete: $backup_dir"

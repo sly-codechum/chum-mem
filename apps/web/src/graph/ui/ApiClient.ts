@@ -36,10 +36,12 @@ export const ApiClient = {
     return fetchJson('/api/projects') as Promise<unknown>;
   },
 
-  getGraph(layer?: string, projectId?: string): Promise<unknown> {
+  getGraph(layer?: string, projectId?: string, limits?: { maxNodes?: number; maxEdges?: number }): Promise<unknown> {
     const params = new URLSearchParams();
     if (layer) params.set('layer', layer);
     if (projectId) params.set('projectId', projectId);
+    if (limits?.maxNodes !== undefined) params.set('maxNodes', String(limits.maxNodes));
+    if (limits?.maxEdges !== undefined) params.set('maxEdges', String(limits.maxEdges));
     const qs = params.toString();
     return fetchJson(`/api/graph${qs ? `?${qs}` : ''}`) as Promise<unknown>;
   },

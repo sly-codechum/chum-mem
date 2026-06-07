@@ -74,9 +74,8 @@ async function proxyJson(target: string, init?: RequestInit): Promise<Response> 
 
 function proxyGet(localPath: string, remotePath: string) {
   app.get(localPath, async (req, res) => {
-    const qs = Object.keys(req.query).length
-      ? '?' + new URLSearchParams(req.query as Record<string, string>).toString()
-      : '';
+    const params = new URLSearchParams(req.query as Record<string, string>);
+    const qs = params.size ? '?' + params.toString() : '';
     const response = await proxyJson(`${remotePath}${qs}`);
     res.status(response.status).type(response.headers.get('content-type') ?? 'application/json').send(await response.text());
   });
