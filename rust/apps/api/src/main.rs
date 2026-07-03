@@ -4941,12 +4941,27 @@ async fn resolve_global_project_id(
     tx: &mut Transaction<'_, Postgres>,
     scope: &RepositoryContext,
 ) -> Option<Uuid> {
-    sqlx::query_scalar::<_, Uuid>(
+    if let Some(project_id) = sqlx::query_scalar::<_, Uuid>(
         "SELECT id FROM public.projects WHERE organization_id = $1 AND team_id = $2 AND slug = $3 LIMIT 1",
     )
     .bind(scope.organization_id)
     .bind(scope.team_id)
     .bind(GLOBAL_PROJECT_SLUG)
+    .fetch_optional(&mut **tx)
+    .await
+    .ok()
+    .flatten()
+    {
+        return Some(project_id);
+    }
+
+    let legacy_project_id = Uuid::parse_str("00000000-0000-0000-0000-000000000003").ok()?;
+    sqlx::query_scalar::<_, Uuid>(
+        "SELECT id FROM public.projects WHERE organization_id = $1 AND team_id = $2 AND id = $3 LIMIT 1",
+    )
+    .bind(scope.organization_id)
+    .bind(scope.team_id)
+    .bind(legacy_project_id)
     .fetch_optional(&mut **tx)
     .await
     .ok()

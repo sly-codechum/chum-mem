@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { createReadStream } from 'node:fs';
+import { createReadStream, readFileSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { readdir, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
@@ -97,6 +97,7 @@ interface ImportStats {
 const MAX_EVENT_STRING_CHARS = 200_000;
 const DEFAULT_CONCURRENCY = 8;
 const DEFAULT_BATCH_SIZE = 1000;
+const LEGACY_DEFAULT_PROJECT_ID = '00000000-0000-0000-0000-000000000003';
 
 function parseArgs(argv: string[]): ImportOptions {
   const args = new Map<string, string | boolean>();
@@ -132,8 +133,8 @@ function parseArgs(argv: string[]): ImportOptions {
     ?? `${join(homedir(), '.codex', 'sessions')},${join(homedir(), '.claude', 'projects')},${join(homedir(), '.gemini', 'tmp')}`;
 
   const options: ImportOptions = {
-    serverUrl: stringArg(args, '--server-url') ?? 'http://localhost:63001',
-    projectId: stringArg(args, '--project-id') ?? '00000000-0000-0000-0000-000000000003',
+    serverUrl: stringArg(args, '--server-url') ?? stringArg(args, '--server') ?? 'http://localhost:63001',
+    projectId: defaultProjectId(args),
     roots: rootsRaw.split(',').map((value) => resolve(expandHome(value.trim()))).filter((value) => value.length > 0),
     dryRun: boolArg(args, '--dry-run'),
     concurrency: Number(stringArg(args, '--concurrency') ?? DEFAULT_CONCURRENCY),
@@ -173,6 +174,36 @@ function stringArg(args: Map<string, string | boolean>, key: string): string | u
 
 function boolArg(args: Map<string, string | boolean>, key: string): boolean {
   return args.get(key) === true;
+}
+
+function defaultProjectId(args: Map<string, string | boolean>): string {
+  return (
+    stringArg(args, '--project-id')
+    ?? stringArg(args, '--project')
+    ?? projectIdFromChumMem()
+    ?? validProjectId(process.env.CHUM_MEM_PROJECT_ID)
+    ?? LEGACY_DEFAULT_PROJECT_ID
+  );
+}
+
+function projectIdFromChumMem(): string | undefined {
+  try {
+    const raw = readFileSync(join(process.cwd(), '.chum-mem'), 'utf8');
+    const parsed = JSON.parse(raw) as { projectId?: unknown };
+    return validProjectId(parsed.projectId);
+  } catch {
+    return undefined;
+  }
+}
+
+function validProjectId(value: unknown): string | undefined {
+  if (typeof value !== 'string') {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(trimmed)
+    ? trimmed
+    : undefined;
 }
 
 function expandHome(input: string): string {

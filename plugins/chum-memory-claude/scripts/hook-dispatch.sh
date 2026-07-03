@@ -61,11 +61,13 @@ CHUM_MEM_FILE="${PROJECT_DIR}/.chum-mem"
 if [[ -f "$CHUM_MEM_FILE" ]]; then
   RESOLVED_PROJECT_ID=$(jq -r '.projectId // ""' "$CHUM_MEM_FILE" 2>/dev/null || echo "")
 fi
-if [[ -z "${RESOLVED_PROJECT_ID:-}" || "$RESOLVED_PROJECT_ID" == "null" ]]; then
+if [[ -n "${RESOLVED_PROJECT_ID:-}" && "$RESOLVED_PROJECT_ID" != "null" ]]; then
+  CANDIDATE_PROJECT_ID="$RESOLVED_PROJECT_ID"
+elif [[ -n "${CHUM_MEM_PROJECT_ID:-}" ]]; then
+  CANDIDATE_PROJECT_ID="$CHUM_MEM_PROJECT_ID"
+else
   # Auto-register project via API using a local project id, not a git remote.
-  if [[ -n "${CHUM_MEM_PROJECT_ID:-}" ]]; then
-    CANDIDATE_PROJECT_ID="$CHUM_MEM_PROJECT_ID"
-  elif command -v uuidgen >/dev/null 2>&1; then
+  if command -v uuidgen >/dev/null 2>&1; then
     CANDIDATE_PROJECT_ID=$(uuidgen | tr '[:upper:]' '[:lower:]')
   else
     CANDIDATE_PROJECT_ID=$(python3 - <<'PY'
@@ -74,16 +76,16 @@ print(uuid.uuid4())
 PY
 )
   fi
-  PROJECT_NAME=$(basename "$PROJECT_DIR")
-  RESOLVE_PAYLOAD=$(jq -n --arg projectId "$CANDIDATE_PROJECT_ID" --arg name "$PROJECT_NAME" \
-    '{projectId: $projectId, name: $name}')
-  RESOLVE_RESP=$(curl -sf --max-time 5 -X POST -H "Content-Type: application/json" \
-    -d "$RESOLVE_PAYLOAD" "${API_URL}/v1/projects/resolve" 2>/dev/null) || RESOLVE_RESP=""
-  if [[ -n "$RESOLVE_RESP" ]]; then
-    RESOLVED_PROJECT_ID=$(echo "$RESOLVE_RESP" | jq -r '.projectId // ""' 2>/dev/null || echo "")
-    if [[ -n "$RESOLVED_PROJECT_ID" && "$RESOLVED_PROJECT_ID" != "null" ]]; then
-      echo "$RESOLVE_RESP" | jq '{projectId: .projectId, name: .name}' > "$CHUM_MEM_FILE" 2>/dev/null || true
-    fi
+fi
+PROJECT_NAME=$(basename "$PROJECT_DIR")
+RESOLVE_PAYLOAD=$(jq -n --arg projectId "$CANDIDATE_PROJECT_ID" --arg name "$PROJECT_NAME" \
+  '{projectId: $projectId, name: $name}')
+RESOLVE_RESP=$(curl -sf --max-time 5 -X POST -H "Content-Type: application/json" \
+  -d "$RESOLVE_PAYLOAD" "${API_URL}/v1/projects/resolve" 2>/dev/null) || RESOLVE_RESP=""
+if [[ -n "$RESOLVE_RESP" ]]; then
+  RESOLVED_PROJECT_ID=$(echo "$RESOLVE_RESP" | jq -r '.projectId // ""' 2>/dev/null || echo "")
+  if [[ -n "$RESOLVED_PROJECT_ID" && "$RESOLVED_PROJECT_ID" != "null" ]]; then
+    echo "$RESOLVE_RESP" | jq '{projectId: .projectId, name: .name}' > "$CHUM_MEM_FILE" 2>/dev/null || true
   fi
 fi
 export CHUM_MEM_PROJECT_ID="${RESOLVED_PROJECT_ID:-${CHUM_MEM_PROJECT_ID:-}}"
